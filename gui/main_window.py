@@ -3823,9 +3823,10 @@ class MainWindow(QMainWindow):
             self.append_log("[停止] 当前项目将继续完成，不再开始下一个排队项目。")
             self.desktop_pet.announce("收到停止请求，当前项目做完就不再开始下一项。", "review", 5200)
         else:
-            self.progress_text.setText("已提交停止请求，正在等待安全节点...")
-            self.append_log("[停止] 已收到停止请求，将在 Excel 写入前的安全节点停止。")
-            self.desktop_pet.announce("收到停止请求，我会在写入 Excel 前安全停下。", "review", 4200)
+            self.progress_text.setText("正在停止当前任务...")
+            self.append_log("[停止] Excel 尚未开始写入，正在终止当前任务进程。")
+            self.desktop_pet.announce("收到停止请求，正在安全停止当前任务。", "review", 4200)
+            self.runner.stop()
 
     def on_task_output(self, text: str) -> None:
         self.append_log(text)
@@ -3849,7 +3850,9 @@ class MainWindow(QMainWindow):
             self.desktop_pet.announce(message[0], message[1])
 
     def on_task_finished(self, exit_code: int) -> None:
-        stopped_by_user = exit_code == TASK_CANCELLED_EXIT_CODE
+        stopped_by_user = exit_code == TASK_CANCELLED_EXIT_CODE or (
+            self._task_stop_requested and not self._multi_task_active
+        )
         clear_task_stop_gate(self._task_stop_gate)
         self._task_stop_gate = None
         self._task_active = False

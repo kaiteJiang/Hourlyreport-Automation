@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.23.111-3B82F6?style=for-the-badge" alt="Version 2026.7.23.111">
+  <img src="https://img.shields.io/badge/version-2026.7.26.112-3B82F6?style=for-the-badge" alt="Version 2026.7.26.112">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/data-API%20First-16A34A?style=for-the-badge" alt="API First">
   <img src="https://img.shields.io/badge/Excel-Backup%20%2B%20Verify-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -130,7 +130,7 @@ flowchart TD
 管理员只需分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.23.111.exe
+Hourlyreport_automation_setup_v2026.7.26.112.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动自动检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -277,15 +277,15 @@ hourly_report_bot_release_v0.4.4/
 
 <table>
   <tr>
-    <td><strong>当前基线</strong><br><code>2026.7.23.111</code></td>
-    <td><strong>Release Tag</strong><br><code>v2026.7.23.111</code></td>
+    <td><strong>当前基线</strong><br><code>2026.7.26.112</code></td>
+    <td><strong>Release Tag</strong><br><code>v2026.7.26.112</code></td>
     <td><strong>更新仓库</strong><br><a href="https://github.com/kaiteJiang/Hourlyreport-Automation">Hourlyreport-Automation</a></td>
   </tr>
 </table>
 
 ```text
-在线更新包：Hourlyreport_automation_v2026.7.23.111.zip
-完整安装器：Hourlyreport_automation_setup_v2026.7.23.111.exe
+在线更新包：Hourlyreport_automation_v2026.7.26.112.zip
+完整安装器：Hourlyreport_automation_setup_v2026.7.26.112.exe
 ```
 
 版本号规则为 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/` 和 `browser_profile/`。
@@ -294,6 +294,7 @@ hourly_report_bot_release_v0.4.4/
 
 | 版本 | 重点 |
 |:--|:--|
+| `2026.7.26.112` | 修复旧客户端云端 Token 配置误判及百度阶段无法即时停止 |
 | `2026.7.23.111` | 修复更新助手缺失模块导致“更新并重启”崩溃 |
 | `2026.7.23.110` | 修复云端 Token 时区解析与多授权并发覆盖；更新 GitHub 用户名 |
 | `2026.7.22.109` | 多项目 API 并行与 Excel 串行正式上线；修复在线更新后客户端退出但未重启 |

@@ -63,6 +63,13 @@ def check_baidu_api_profiles(root: str | Path, config: dict[str, Any]) -> dict[s
     missing_source_mappings = _missing_source_api_mappings(config)
     report: dict[str, Any] = {
         "passed": False,
+        "cloud_ready": False,
+        "cloud_gateway": {
+            "exists": False,
+            "app_id_nonempty": False,
+            "client_key_nonempty": False,
+            "token_url_https": False,
+        },
         "required_profiles": required_profiles,
         "missing_source_mappings": missing_source_mappings,
         "profiles": [],
@@ -81,6 +88,21 @@ def check_baidu_api_profiles(root: str | Path, config: dict[str, Any]) -> dict[s
     report["json_valid"] = True
     api_profiles = data.get("baidu_api") if isinstance(data, dict) else {}
     api_profiles = api_profiles if isinstance(api_profiles, dict) else {}
+    gateway = data.get("baidu_api_gateway") if isinstance(data, dict) else {}
+    gateway_exists = isinstance(gateway, dict)
+    gateway = gateway if gateway_exists else {}
+    gateway_app_id = str(gateway.get("app_id") or "").strip()
+    token_url = str(gateway.get("token_url") or "").strip()
+    gateway_report = {
+        "exists": gateway_exists,
+        "app_id_nonempty": bool(gateway_app_id),
+        "client_key_nonempty": bool(str(gateway.get("client_key") or "").strip()),
+        "token_url_https": token_url.lower().startswith("https://"),
+    }
+    report["cloud_gateway"] = gateway_report
+    gateway_ready = all(gateway_report.values())
+    if not gateway_ready:
+        report["errors"].append("云端 Token 配置未就绪，请导入管理员最新授权配置")
     if missing_source_mappings:
         report["errors"].append("存在未配置 api_profile 的百度来源")
     if not required_profiles:
@@ -91,17 +113,24 @@ def check_baidu_api_profiles(root: str | Path, config: dict[str, Any]) -> dict[s
         exists = isinstance(item, dict)
         access_token_nonempty = bool(exists and str(item.get("access_token") or "").strip())
         refresh_token_nonempty = bool(exists and str(item.get("refresh_token") or "").strip())
+        profile_app_id = str(item.get("app_id") or "").strip() if exists else ""
+        app_id_matches_gateway = bool(profile_app_id and gateway_app_id and profile_app_id == gateway_app_id)
         report["profiles"].append({
             "api_profile": profile,
             "exists": exists,
             "access_token_nonempty": access_token_nonempty,
             "refresh_token_nonempty": refresh_token_nonempty,
+            "app_id_nonempty": bool(profile_app_id),
+            "app_id_matches_gateway": app_id_matches_gateway,
         })
         if not exists:
             report["errors"].append(f"缺少 api_profile：{profile}")
-        elif not access_token_nonempty or not refresh_token_nonempty:
-            report["errors"].append(f"api_profile 不完整：{profile}")
+        elif not profile_app_id:
+            report["errors"].append(f"api_profile 缺少 app_id：{profile}")
+        elif gateway_app_id and not app_id_matches_gateway:
+            report["errors"].append(f"api_profile 与云端应用不匹配：{profile}")
     report["passed"] = not report["errors"]
+    report["cloud_ready"] = report["passed"]
     return report
 
 
@@ -280,9 +309,12 @@ def run_preflight(
 
     api_profiles = check_baidu_api_profiles(root_path, config)
     if api_preferred:
+        api_errors = "；".join(api_profiles.get("errors") or [])
         add(
             True,
-            "API 授权检查通过" if api_profiles.get("passed") else "API 授权不可用，本次将使用浏览器降级",
+            "API 云端 Token 检查通过"
+            if api_profiles.get("passed")
+            else f"API 云端 Token 不可用：{api_errors or '配置未就绪'}；本次将使用浏览器降级",
         )
 
     return {

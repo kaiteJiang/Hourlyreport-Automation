@@ -267,7 +267,7 @@ def _validate_cloud_token_config(
         return None
     if not token_url.lower().startswith("https://") or not client_key or not app_id:
         raise BaiduTokenError("configuration_error", "baidu cloud token config incomplete")
-    if str(profile.get("app_id") or "") != app_id:
+    if str(profile.get("app_id") or "").strip() != app_id:
         raise BaiduTokenError("configuration_error", "baidu cloud token app mismatch")
     return profile, gateway
 
@@ -437,16 +437,9 @@ def ensure_valid_access_token_cloud_first(
     secrets = _read_secrets(credentials_path)
     cloud_config = _validate_cloud_token_config(secrets, profile_name)
     if cloud_config is None:
-        return ensure_valid_access_token(
-            config,
-            root,
-            profile_name,
-            now=current_time,
-            transport=transport,
-            force_refresh=force_refresh,
-            timeout_seconds=timeout_seconds,
-            clock=clock,
-            sleep=sleep,
+        raise BaiduTokenError(
+            "configuration_error",
+            "当前电脑缺少云端 Token 配置，请导入管理员最新授权配置",
         )
     _profile, gateway = cloud_config
     request_timeout = float(REFRESH_TIMEOUT_SECONDS)

@@ -6,7 +6,7 @@
 
 - 产品名：`蚁之力 · 竞价数据自动化`
 - 平台：Windows 10/11 本地运行
-- 当前标准版本：`2026.7.23.111`
+- 当前标准版本：`2026.7.26.112`
 - 主要用途：百度竞价日报/小时报自动化
 - 核心流程：百度数据读取、快商通人工导出文件解析、本地 Excel 安全写入、日志与报告输出
 - 用户入口：桌面 GUI、控制台菜单、HERMES 固定 BAT
@@ -62,8 +62,8 @@
 
 ## 版本与发布规则
 
-- 当前标准安装器基线：`2026.7.23.111`
-- 新电脑只分发：`Hourlyreport_automation_setup_v2026.7.23.111.exe`
+- 当前标准安装器基线：`2026.7.26.112`
+- 新电脑只分发：`Hourlyreport_automation_setup_v2026.7.26.112.exe`
 - 在线更新仓库：`kaiteJiang/Hourlyreport-Automation`
 - tag 格式：`v<版本号>`
 - 在线更新包：`Hourlyreport_automation_v<版本号>.zip`

@@ -4038,11 +4038,30 @@ def test_preflight_browser_preference_checks_chrome(tmp_path):
     assert called == [True]
 
 
-def _write_api_profile_test_secrets(tmp_path, api_profiles: dict, browser_profiles: dict | None = None) -> None:
+def _write_api_profile_test_secrets(
+    tmp_path,
+    api_profiles: dict,
+    browser_profiles: dict | None = None,
+    *,
+    cloud_gateway: dict | None = None,
+) -> None:
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
+    gateway = cloud_gateway if cloud_gateway is not None else {
+        "app_id": "app-1",
+        "client_key": "test-client-key",
+        "token_url": "https://example.invalid/baidu/oauth/token",
+    }
+    normalized_profiles = {
+        name: {"app_id": "app-1", **profile}
+        for name, profile in api_profiles.items()
+    }
     (secrets_dir / "secrets.json").write_text(
-        json.dumps({"baidu": browser_profiles or {}, "baidu_api": api_profiles}),
+        json.dumps({
+            "baidu": browser_profiles or {},
+            "baidu_api": normalized_profiles,
+            "baidu_api_gateway": gateway,
+        }),
         encoding="utf-8",
     )
 
@@ -4095,6 +4114,72 @@ def test_check_baidu_api_profiles_supports_multi_source(tmp_path):
     assert "test-refresh-b" not in json.dumps(report)
 
 
+def test_check_baidu_api_profiles_rejects_legacy_local_tokens_without_cloud_endpoint(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_a": {"access_token": "test-token-a", "refresh_token": "test-refresh-a"}},
+        cloud_gateway={
+            "app_id": "app-1",
+            "client_key": "test-client-key",
+            "refresh_url": "https://example.invalid/baidu/oauth/refresh",
+        },
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"api_profile": "source_a"},
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is False
+    assert report["cloud_ready"] is False
+    assert report["cloud_gateway"]["token_url_https"] is False
+    assert any("导入管理员最新授权配置" in error for error in report["errors"])
+    assert "test-client-key" not in json.dumps(report)
+    assert "test-token-a" not in json.dumps(report)
+
+
+def test_check_baidu_api_profiles_accepts_cloud_profile_without_local_tokens(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_a": {"access_token": "", "refresh_token": ""}},
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"api_profile": "source_a"},
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is True
+    assert report["cloud_ready"] is True
+    assert report["profiles"][0]["app_id_matches_gateway"] is True
+
+
+def test_check_baidu_api_profiles_rejects_profile_from_different_cloud_app(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_a": {"app_id": "different-app"}},
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"api_profile": "source_a"},
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is False
+    assert report["cloud_ready"] is False
+    assert report["profiles"][0]["app_id_matches_gateway"] is False
+    assert any("与云端应用不匹配" in error for error in report["errors"])
+
+
 def test_check_baidu_api_profiles_fails_for_multi_source_missing_mapping(tmp_path):
     from modules.preflight import check_baidu_api_profiles
 
@@ -4118,7 +4203,7 @@ def test_check_baidu_api_profiles_fails_for_multi_source_missing_mapping(tmp_pat
     assert "test-token-b" not in json.dumps(report)
 
 
-def test_check_baidu_api_profiles_fails_for_missing_or_empty_tokens(tmp_path):
+def test_check_baidu_api_profiles_fails_for_missing_profile_and_reports_local_token_presence(tmp_path):
     from modules.preflight import check_baidu_api_profiles
 
     _write_api_profile_test_secrets(
@@ -8989,6 +9074,57 @@ def test_token_manager_cloud_first_uses_token_endpoint_without_local_refresh_tok
     assert "old.refresh.token" not in json.dumps(calls[0], ensure_ascii=False)
 
 
+def test_token_manager_cloud_first_normalizes_profile_app_id_whitespace(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token_cloud_first
+
+    secrets_path = _write_token_manager_secrets(
+        tmp_path,
+        token_url="https://example.invalid/baidu/oauth/token",
+    )
+    secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
+    secrets["baidu_api"]["kunming_niu_baidu"]["app_id"] = " app-1 "
+    secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
+
+    token, metadata = ensure_valid_access_token_cloud_first(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=lambda *_args: {
+            "status": "ok",
+            "authorization": {
+                "access_token": "cloud.access.token",
+                "expires_time": "2026-07-18 09:00:00",
+            },
+        },
+    )
+
+    assert token == "cloud.access.token"
+    assert metadata["token_source"] == "cloud"
+
+
+def test_token_manager_cloud_first_rejects_missing_cloud_endpoint_without_local_fallback(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token_cloud_first
+
+    _write_token_manager_secrets(tmp_path)
+    calls = []
+
+    with pytest.raises(BaiduTokenError) as exc_info:
+        ensure_valid_access_token_cloud_first(
+            {},
+            tmp_path,
+            "kunming_niu_baidu",
+            now=datetime(2026, 7, 17, 9, 0, 0),
+            transport=lambda *args: calls.append(args),
+        )
+
+    assert exc_info.value.category == "configuration_error"
+    assert "云端 Token 配置" in str(exc_info.value)
+    assert calls == []
+
+
 def test_token_manager_deducts_lock_wait_from_refresh_timeout(tmp_path, monkeypatch):
     from contextlib import contextmanager
     from datetime import datetime
@@ -9176,7 +9312,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.23.111",
+        version="2026.7.26.112",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -9185,9 +9321,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.23.111.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.26.112.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.23.111", online_update=True) == release.name
+    assert release_name("2026.7.26.112", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -11173,8 +11309,10 @@ def test_desktop_gui_safe_stop_is_available_only_before_excel(tmp_path, monkeypa
     )
 
     starts = []
+    stops = []
     window.runner.start = lambda command, root, extra_env=None: starts.append((command, root, extra_env))
     window.runner.is_running = lambda: True
+    window.runner.stop = lambda: stops.append(True)
 
     assert not window.hourly_stop_button.isEnabled()
     assert not window.daily_stop_button.isEnabled()
@@ -11189,10 +11327,11 @@ def test_desktop_gui_safe_stop_is_available_only_before_excel(tmp_path, monkeypa
     assert read_task_stop_decision(hourly_gate) == "cancel"
     assert not window.hourly_stop_button.isEnabled()
     assert window._task_stop_requested is True
+    assert stops == [True]
 
     opened = []
     window.open_current_project_excel = lambda: opened.append(True)
-    window.on_task_finished(TASK_CANCELLED_EXIT_CODE)
+    window.on_task_finished(-1)
     assert window.current_status_badge.text() == "已停止"
     assert window.progress_text.text() == "任务已停止，未继续写入 Excel。"
     assert opened == []
@@ -11208,10 +11347,36 @@ def test_desktop_gui_safe_stop_is_available_only_before_excel(tmp_path, monkeypa
     assert not window.daily_stop_button.isEnabled()
     window.stop_current_task()
     assert read_task_stop_decision(daily_gate) == "excel"
+    assert stops == [True]
     window.on_task_finished(0)
     assert window.current_status_badge.text() == "已完成"
     assert opened == [True]
 
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_multi_project_stop_does_not_kill_current_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+    from modules.task_stop_gate import read_task_stop_decision
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    stops = []
+    window._multi_task_active = True
+    window._task_active = True
+    window.current_task_type = "hourly"
+    window._task_stop_gate = tmp_path / "reports" / ".multi-stop.gate"
+    window.runner.is_running = lambda: True
+    window.runner.stop = lambda: stops.append(True)
+
+    window.stop_current_task()
+
+    assert read_task_stop_decision(window._task_stop_gate) == "cancel"
+    assert stops == []
     window._quitting = True
     window.close()
 
@@ -11518,7 +11683,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.23.111"
+    assert CURRENT_VERSION == "2026.7.26.112"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
@@ -11526,13 +11691,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.23.112",
+        "tag_name": "v2026.7.26.113",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.23.112.zip",
+                "name": "Hourlyreport_automation_v2026.7.26.113.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11543,10 +11708,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.23.112"
+    assert update.version == "2026.7.26.113"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.23.112") is None
+    assert select_release_update(payload, "2026.7.26.113") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -11639,12 +11804,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.23.112",
+        "tag_name": "v2026.7.26.113",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.23.112.zip",
+                "name": "Hourlyreport_automation_v2026.7.26.113.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11672,7 +11837,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.23.112"]
+    assert [item.version for item in available] == ["2026.7.26.113"]
     assert ready == []
 
 
