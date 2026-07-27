@@ -3,14 +3,47 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
-from typing import Iterable
+from typing import Callable, Iterable
 
 from modules.kst_local.models import KstInstallation
 
 
 class KstDiscoveryError(RuntimeError):
     """商务通安装或当前身份无法安全定位。"""
+
+
+def _active_log_max_age_seconds() -> float:
+    raw = os.environ.get("KST_ACTIVE_LOG_MAX_AGE_SECONDS", "300")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 300
+    return min(max(value, 30), 86_400)
+
+
+def _client_process_running(electron: Path) -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        completed = subprocess.run(
+            [
+                "tasklist",
+                "/FI",
+                f"IMAGENAME eq {electron.name}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return f'"{electron.name}"'.casefold() in completed.stdout.casefold()
 
 
 def _candidate_roots() -> Iterable[Path]:
@@ -156,11 +189,15 @@ def _resolve_installation_root(
 def discover_installations(
     explicit_root: str | Path | None = None,
     local_app_data: str | Path | None = None,
-    active_within_seconds: float = 300,
+    active_within_seconds: float | None = None,
+    require_running_process: bool = False,
+    process_checker: Callable[[Path], bool] = _client_process_running,
 ) -> list[KstInstallation]:
     root, electron, sqlite_module, version = _resolve_installation_root(
         explicit_root
     )
+    if require_running_process and not process_checker(electron):
+        raise KstDiscoveryError("未检测到正在运行的商务通客户端进程")
     local_root = Path(
         local_app_data
         if local_app_data is not None
@@ -168,7 +205,11 @@ def discover_installations(
     ).expanduser().resolve()
     candidates = _identity_candidates(
         local_root,
-        active_within_seconds=active_within_seconds,
+        active_within_seconds=(
+            _active_log_max_age_seconds()
+            if active_within_seconds is None
+            else active_within_seconds
+        ),
     )
     if not candidates:
         data_root = local_root / "OnlineWebCSNew"

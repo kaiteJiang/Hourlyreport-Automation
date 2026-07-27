@@ -1,6 +1,6 @@
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from gui.kst_status_control import KstStatusControl
 
@@ -27,7 +27,7 @@ def test_status_control_exact_text_and_colors(qapp):
 def test_status_control_has_no_menu_or_source_signal(qapp):
     control = KstStatusControl()
 
-    assert control.kst_button.menu() is None
+    assert isinstance(control.kst_button, QLabel)
     assert control.kst_button.cursor().shape() == Qt.CursorShape.ArrowCursor
     assert not hasattr(control, "source_selected")
     assert not hasattr(control, "api_action")

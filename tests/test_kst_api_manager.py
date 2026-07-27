@@ -165,3 +165,28 @@ def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
     assert wait_until(manager.owns_server)
     assert manager.is_ready() is True
     manager.stop()
+
+
+def test_owned_server_periodically_refreshes_identity_registry(qapp, tmp_path):
+    server = FakeServer()
+    registries = []
+
+    def registry_factory(*_args):
+        registry = FakeRegistry()
+        registries.append(registry)
+        return registry
+
+    manager = KstApiManager(
+        tmp_path,
+        registry_factory=registry_factory,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+
+    assert wait_until(manager.is_ready)
+    assert wait_until(lambda: len(registries) >= 2)
+    assert all(item.refresh_calls == 1 for item in registries)
+    manager.stop()

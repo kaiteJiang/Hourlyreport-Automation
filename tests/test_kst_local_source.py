@@ -18,7 +18,7 @@ def _config(url="http://127.0.0.1:18766"):
         },
         "kst": {
             "local_api_url": url,
-            "local_api_token_env": "TEST_KST_TOKEN",
+            "local_api_token_env": "KST_LOCAL_API_TOKEN",
         },
     }
 
@@ -27,7 +27,7 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("TEST_KST_TOKEN", "secret")
+    monkeypatch.setenv("KST_LOCAL_API_TOKEN", "secret")
     calls = []
 
     def transport(url, headers, timeout):
@@ -76,6 +76,16 @@ def test_source_rejects_non_loopback_url(tmp_path):
     with pytest.raises(KstLocalSourceError, match="回环"):
         fetch_kst_local_report(
             _config("http://192.168.1.10:18766"),
+            tmp_path,
+            "15点",
+            transport=lambda *args: {},
+        )
+
+
+def test_source_rejects_alternate_loopback_port(tmp_path):
+    with pytest.raises(KstLocalSourceError, match="18766"):
+        fetch_kst_local_report(
+            _config("http://127.0.0.1:19999"),
             tmp_path,
             "15点",
             transport=lambda *args: {},

@@ -42,9 +42,11 @@ def _validate_loopback_url(value: str) -> str:
     parsed = urllib.parse.urlparse(value)
     if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
         raise KstLocalSourceError("商务通本地 API 必须使用 127.0.0.1 回环地址")
-    if not parsed.port:
-        raise KstLocalSourceError("商务通本地 API 地址缺少端口")
-    return value.rstrip("/")
+    if parsed.port != 18766:
+        raise KstLocalSourceError("商务通本地 API 必须使用固定端口 18766")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise KstLocalSourceError("商务通本地 API 基础地址格式无效")
+    return "http://127.0.0.1:18766"
 
 
 def write_unavailable_zero_result(
@@ -122,7 +124,11 @@ def fetch_kst_local_report(
     token_env = str(
         kst_config.get("local_api_token_env") or "KST_LOCAL_API_TOKEN"
     )
-    token = os.environ.get(token_env, "")
+    if token_env != "KST_LOCAL_API_TOKEN":
+        raise KstLocalSourceError(
+            "商务通本地 API 令牌变量必须为 KST_LOCAL_API_TOKEN"
+        )
+    token = os.environ.get("KST_LOCAL_API_TOKEN", "")
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

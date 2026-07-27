@@ -111,3 +111,35 @@ def test_discover_installations_excludes_historical_inactive_identity(tmp_path):
     )
 
     assert [item.identity for item in found] == ["733875_1269870"]
+
+
+def test_active_identity_age_window_can_be_configured_by_environment(
+    tmp_path,
+    monkeypatch,
+):
+    root, local_app_data = _build_installation(tmp_path)
+    log_file = next(
+        (local_app_data / "OnlineWebCSNew" / "log").rglob("app.log")
+    )
+    old_time = time.time() - 600
+    os.utime(log_file, (old_time, old_time))
+    monkeypatch.setenv("KST_ACTIVE_LOG_MAX_AGE_SECONDS", "900")
+
+    found = discover_installations(
+        explicit_root=root,
+        local_app_data=local_app_data,
+    )
+
+    assert len(found) == 1
+
+
+def test_registry_discovery_can_require_running_client_process(tmp_path):
+    root, local_app_data = _build_installation(tmp_path)
+
+    with pytest.raises(KstDiscoveryError, match="正在运行"):
+        discover_installations(
+            explicit_root=root,
+            local_app_data=local_app_data,
+            require_running_process=True,
+            process_checker=lambda _electron: False,
+        )

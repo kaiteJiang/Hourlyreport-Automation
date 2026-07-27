@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,7 +22,11 @@ class KstIdentityMappingError(RuntimeError):
 
 def _project_promotion_ids(project: dict[str, Any]) -> set[str]:
     result: set[str] = set()
-    for account in project.get("accounts", []) or []:
+    accounts = list(project.get("accounts", []) or [])
+    for source in project.get("baidu_sources", []) or []:
+        if isinstance(source, dict):
+            accounts.extend(source.get("accounts", []) or [])
+    for account in accounts:
         if not isinstance(account, dict):
             continue
         for value in account.get("kst_ids", []) or []:
@@ -56,13 +61,17 @@ def _load_formal_projects(root: str | Path) -> list[dict[str, Any]]:
     ]
 
 
+def _discover_active_installations() -> list[KstInstallation]:
+    return discover_installations(require_running_process=True)
+
+
 class KstIdentityRegistry:
     def __init__(
         self,
         root: str | Path,
         *,
         projects_loader: Callable[[str | Path], list[dict[str, Any]]] = _load_formal_projects,
-        installations_loader: Callable[[], list[KstInstallation]] = discover_installations,
+        installations_loader: Callable[[], list[KstInstallation]] = _discover_active_installations,
         promotion_id_reader: Callable[[KstInstallation], set[str]] = read_identity_promotion_ids,
         project_loader: Callable[[str | Path, str], dict[str, Any]] = load_project_config,
         config_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] = build_runtime_config_from_project,
@@ -125,6 +134,22 @@ class KstIdentityRegistry:
             else:
                 self._project_errors[project_id] = "未找到匹配身份"
         self._refreshed = True
+        for project_id in list(self._bindings):
+            try:
+                runtime = self.build_runtime(
+                    project_id,
+                    date.today().isoformat(),
+                )
+                health = runtime.health()
+                ready = (
+                    health.get("status") == "ok"
+                    and health.get("required_endpoints_available") is True
+                )
+            except Exception:
+                ready = False
+            if not ready:
+                self._bindings.pop(project_id, None)
+                self._project_errors[project_id] = "必需接口不可用"
 
     def installation_for(self, project_id: str) -> KstInstallation:
         if not self._refreshed:
@@ -153,9 +178,10 @@ class KstIdentityRegistry:
         unbound_project_ids = sorted(
             set(all_project_ids) - set(bound_project_ids)
         )
+        ready = self._refreshed and bool(bound_project_ids)
         return {
-            "status": "ok" if self._refreshed else "not_ready",
-            "required_endpoints_available": self._refreshed,
+            "status": "ok" if ready else "not_ready",
+            "required_endpoints_available": ready,
             "project_routing": True,
             "identity_count": self._identity_count,
             "bound_project_ids": bound_project_ids,

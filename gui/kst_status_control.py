@@ -1,12 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QToolButton,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 
 class KstStatusControl(QWidget):
@@ -16,9 +11,8 @@ class KstStatusControl(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self.kst_button = QToolButton(self)
+        self.kst_button = QLabel(self)
         self.kst_button.setText("● KST")
-        self.kst_button.setAutoRaise(True)
         self.kst_button.setCursor(Qt.CursorShape.ArrowCursor)
         self.kst_button.setProperty("apiReady", False)
 
@@ -35,16 +29,12 @@ class KstStatusControl(QWidget):
         color = "#34c759" if ready else "#9aa5b1"
         self.kst_button.setStyleSheet(
             f"""
-            QToolButton {{
+            QLabel {{
                 color: {color};
                 font-weight: 700;
                 border: none;
                 padding: 0;
                 background: transparent;
-            }}
-            QToolButton::menu-indicator {{
-                image: none;
-                width: 0;
             }}
             """
         )

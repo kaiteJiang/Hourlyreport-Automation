@@ -26,6 +26,16 @@ def project(project_id, promotion_ids):
     }
 
 
+class HealthyRuntime:
+    service = object()
+
+    def health(self):
+        return {
+            "status": "ok",
+            "required_endpoints_available": True,
+        }
+
+
 def installation(tmp_path: Path, identity: str) -> KstInstallation:
     root = tmp_path / "app"
     return KstInstallation(
@@ -63,7 +73,9 @@ def registry_for(tmp_path, projects, identities, *, runtime_builder=None):
                 "promotion_id_accounts": {},
             },
         },
-        runtime_builder=runtime_builder or (lambda *_args, **_kwargs: object()),
+        runtime_builder=runtime_builder or (
+            lambda *_args, **_kwargs: HealthyRuntime()
+        ),
     )
 
 
@@ -75,6 +87,19 @@ def test_duplicate_promotion_id_across_projects_is_rejected():
                 project("b", ["1001"]),
             ]
         )
+
+
+def test_index_includes_accounts_nested_under_baidu_sources():
+    nested = project("nested", [])
+    nested["baidu_sources"] = [
+        {
+            "accounts": [
+                {"standard_name": "source-account", "kst_ids": ["60001"]}
+            ]
+        }
+    ]
+
+    assert build_project_promotion_index([nested]) == {"60001": "nested"}
 
 
 def test_three_identities_map_to_three_projects_by_promotion_id(tmp_path):
@@ -125,7 +150,7 @@ def test_ambiguous_identity_mapping_is_never_guessed(tmp_path, identities):
 
 def test_registry_build_runtime_passes_only_bound_installation(tmp_path):
     calls = []
-    sentinel = object()
+    sentinel = HealthyRuntime()
     registry = registry_for(
         tmp_path,
         projects=[project("a", ["10001"])],
@@ -140,7 +165,42 @@ def test_registry_build_runtime_passes_only_bound_installation(tmp_path):
     result = registry.build_runtime("a", "2026-07-27")
 
     assert result is sentinel
-    assert calls == [("a", "2026-07-27", "id-a")]
+    assert calls[-1] == ("a", "2026-07-27", "id-a")
+
+
+def test_registry_with_no_binding_is_not_healthy(tmp_path):
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"unknown": {"99999"}},
+    )
+
+    registry.refresh()
+
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["required_endpoints_available"] is False
+
+
+def test_binding_with_missing_required_endpoints_is_rejected(tmp_path):
+    class NotReadyRuntime(HealthyRuntime):
+        def health(self):
+            return {
+                "status": "not_ready",
+                "required_endpoints_available": False,
+            }
+
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        runtime_builder=lambda *_args, **_kwargs: NotReadyRuntime(),
+    )
+
+    registry.refresh()
+
+    with pytest.raises(KstIdentityMappingError, match="接口"):
+        registry.installation_for("a")
 
 
 def test_health_diagnostics_expose_no_identity_or_promotion_ids(tmp_path):

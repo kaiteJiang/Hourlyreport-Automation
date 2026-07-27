@@ -74,6 +74,7 @@ class KstApiManager(QObject):
         self._registry: Any | None = None
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
+        self._server_thread: threading.Thread | None = None
         self._server: Any | None = None
         self._owns_server = False
         self._external_server = False
@@ -102,8 +103,10 @@ class KstApiManager(QObject):
         with self._lock:
             server = self._server if self._owns_server else None
             worker = self._worker
+            server_thread = self._server_thread
             self._server = None
             self._registry = None
+            self._server_thread = None
             self._owns_server = False
             self._external_server = False
             self._ready = False
@@ -119,6 +122,12 @@ class KstApiManager(QObject):
             and worker is not threading.current_thread()
         ):
             worker.join(timeout=5)
+        if (
+            server_thread is not None
+            and server_thread.is_alive()
+            and server_thread is not threading.current_thread()
+        ):
+            server_thread.join(timeout=5)
 
     def is_ready(self) -> bool:
         with self._lock:
@@ -144,17 +153,76 @@ class KstApiManager(QObject):
         with self._lock:
             if self._stopping:
                 return
-            if self._ready and self._owns_server:
-                return
             if self._worker is not None and self._worker.is_alive():
                 return
+            target = (
+                self._refresh_owned_registry
+                if self._owns_server
+                else self._ensure_service
+            )
             self._worker = threading.Thread(
-                target=self._ensure_service,
+                target=target,
                 name="kst-api-manager",
                 daemon=True,
             )
             worker = self._worker
         worker.start()
+
+    def _refresh_owned_registry(self) -> None:
+        try:
+            registry = self._registry_factory(self._root)
+            registry.refresh()
+            health = registry.health()
+            ready = (
+                health.get("status") == "ok"
+                and health.get("required_endpoints_available") is True
+            )
+        except Exception:
+            registry = None
+            ready = False
+        with self._lock:
+            if self._stopping or not self._owns_server:
+                return
+            self._registry = registry if ready else None
+        if ready:
+            self._publish(True, "商务通本地 API 正常：127.0.0.1:18766")
+        else:
+            self._publish(
+                False,
+                "商务通登录身份尚未就绪，正在重试",
+            )
+
+    def _service_for(self, project_id: str, request_date: str) -> Any:
+        with self._lock:
+            registry = self._registry
+        if registry is None:
+            raise RuntimeError("KST identity registry is not ready")
+        return registry.build_runtime(project_id, request_date).service
+
+    def _registry_health(self) -> dict[str, Any]:
+        with self._lock:
+            registry = self._registry
+        if registry is None:
+            return {
+                "status": "not_ready",
+                "required_endpoints_available": False,
+                "project_routing": True,
+            }
+        return registry.health()
+
+    def _serve_owned_server(self, server: Any) -> None:
+        server.serve_forever()
+        with self._lock:
+            unexpected_stop = not self._stopping
+            if self._server is server:
+                self._server = None
+                self._server_thread = None
+                self._registry = None
+                self._owns_server = False
+                self._external_server = False
+                server.server_close()
+        if unexpected_stop:
+            self._publish(False, "商务通本地 API 已停止，正在重试")
 
     @staticmethod
     def _probe_result(value: bool | tuple[bool, str]) -> tuple[bool, str]:
@@ -206,17 +274,11 @@ class KstApiManager(QObject):
                 )
                 return
 
-            def service_factory(project_id: str, request_date: str):
-                return registry.build_runtime(
-                    project_id,
-                    request_date,
-                ).service
-
             server = self._server_factory(
                 "127.0.0.1",
                 port,
-                service_factory=service_factory,
-                health_provider=registry.health,
+                service_factory=self._service_for,
+                health_provider=self._registry_health,
                 token=token,
             )
             with self._lock:
@@ -227,18 +289,16 @@ class KstApiManager(QObject):
                 self._registry = registry
                 self._owns_server = True
                 self._external_server = False
+                self._server_thread = threading.Thread(
+                    target=self._serve_owned_server,
+                    args=(server,),
+                    name="kst-api-server",
+                    daemon=True,
+                )
+                server_thread = self._server_thread
             self._publish(True, f"商务通本地 API 已启动：127.0.0.1:{port}")
             self.log_message.emit("商务通本地 API 已随程序启动")
-            server.serve_forever()
-            with self._lock:
-                unexpected_stop = not self._stopping
-                if self._server is server:
-                    self._server = None
-                    self._owns_server = False
-                    self._external_server = False
-                    server.server_close()
-            if unexpected_stop:
-                self._publish(False, "商务通本地 API 已停止，正在重试")
+            server_thread.start()
         except Exception:
             self._publish(False, "商务通本地 API 启动失败，正在重试")
             self.log_message.emit("商务通本地 API 暂不可用，将自动重试")
