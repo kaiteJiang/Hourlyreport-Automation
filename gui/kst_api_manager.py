@@ -211,16 +211,20 @@ class KstApiManager(QObject):
         return registry.health()
 
     def _serve_owned_server(self, server: Any) -> None:
-        server.serve_forever()
-        with self._lock:
-            unexpected_stop = not self._stopping
-            if self._server is server:
-                self._server = None
-                self._server_thread = None
-                self._registry = None
-                self._owns_server = False
-                self._external_server = False
-                server.server_close()
+        try:
+            server.serve_forever()
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                unexpected_stop = not self._stopping
+                if self._server is server:
+                    self._server = None
+                    self._server_thread = None
+                    self._registry = None
+                    self._owns_server = False
+                    self._external_server = False
+                    server.server_close()
         if unexpected_stop:
             self._publish(False, "商务通本地 API 已停止，正在重试")
 

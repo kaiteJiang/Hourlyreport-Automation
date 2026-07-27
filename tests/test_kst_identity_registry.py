@@ -49,7 +49,14 @@ def installation(tmp_path: Path, identity: str) -> KstInstallation:
     )
 
 
-def registry_for(tmp_path, projects, identities, *, runtime_builder=None):
+def registry_for(
+    tmp_path,
+    projects,
+    identities,
+    *,
+    runtime_builder=None,
+    endpoint_checker=lambda *_args: True,
+):
     installations = [
         installation(tmp_path, identity)
         for identity in identities
@@ -76,6 +83,7 @@ def registry_for(tmp_path, projects, identities, *, runtime_builder=None):
         runtime_builder=runtime_builder or (
             lambda *_args, **_kwargs: HealthyRuntime()
         ),
+        endpoint_checker=endpoint_checker,
     )
 
 
@@ -183,18 +191,11 @@ def test_registry_with_no_binding_is_not_healthy(tmp_path):
 
 
 def test_binding_with_missing_required_endpoints_is_rejected(tmp_path):
-    class NotReadyRuntime(HealthyRuntime):
-        def health(self):
-            return {
-                "status": "not_ready",
-                "required_endpoints_available": False,
-            }
-
     registry = registry_for(
         tmp_path,
         projects=[project("a", ["10001"])],
         identities={"id-a": {"10001"}},
-        runtime_builder=lambda *_args, **_kwargs: NotReadyRuntime(),
+        endpoint_checker=lambda *_args: False,
     )
 
     registry.refresh()

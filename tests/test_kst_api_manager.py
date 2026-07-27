@@ -69,6 +69,11 @@ class FakeServer:
         self.close_calls += 1
 
 
+class ExplodingServer(FakeServer):
+    def serve_forever(self):
+        raise OSError("listener failed")
+
+
 def _manager(tmp_path, **kwargs):
     return KstApiManager(
         tmp_path,
@@ -189,4 +194,21 @@ def test_owned_server_periodically_refreshes_identity_registry(qapp, tmp_path):
     assert wait_until(manager.is_ready)
     assert wait_until(lambda: len(registries) >= 2)
     assert all(item.refresh_calls == 1 for item in registries)
+    manager.stop()
+
+
+def test_owned_server_exception_clears_ready_and_ownership(qapp, tmp_path):
+    server = ExplodingServer()
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=5_000,
+    )
+
+    manager.start()
+
+    assert wait_until(lambda: server.close_calls == 1)
+    assert manager.is_ready() is False
+    assert manager.owns_server() is False
     manager.stop()
