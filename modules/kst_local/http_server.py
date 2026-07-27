@@ -68,6 +68,7 @@ def create_server(
             if parsed.path in {
                 "/v1/kst/conversations",
                 "/v1/kst/hourly",
+                "/v1/kst/daily",
             }:
                 project_id = str(query.get("project_id", [""])[0]).strip()
                 if not project_id:
@@ -96,6 +97,12 @@ def create_server(
                     self._send(
                         200,
                         service.build_hourly_report(target_date, period),
+                    )
+                    return
+                if parsed.path == "/v1/kst/daily":
+                    self._send(
+                        200,
+                        service.build_daily_report(target_date),
                     )
                     return
             except Exception:

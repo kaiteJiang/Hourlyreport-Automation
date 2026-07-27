@@ -30,6 +30,23 @@ class FakeService:
             "accounts": {"银康01": {"总对话": 1}},
         }
 
+    def build_daily_report(self, target_date):
+        return {
+            "project_id": "kunming_niu",
+            "date": target_date,
+            "source": "kst_local_api",
+            "accounts": {
+                "银康01": {
+                    "总对话": 1,
+                    "有效对话": 1,
+                    "无效对话": 0,
+                    "一般有效对话": 0,
+                    "有效转潜": 0,
+                    "总转潜": 0,
+                }
+            },
+        }
+
 
 def _get(url, token=None):
     headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -80,6 +97,15 @@ def test_server_binds_loopback_authenticates_and_returns_safe_payload():
         )
         assert hourly["source"] == "kst_local_api"
         assert hourly["period"] == "15点"
+
+        status, daily = _get(
+            f"{base}/v1/kst/daily?project_id=kunming_niu&date=2026-07-27",
+            token="local-secret",
+        )
+        assert status == 200
+        assert daily["project_id"] == "kunming_niu"
+        assert daily["date"] == "2026-07-27"
+        assert daily["accounts"]["银康01"]["无效对话"] == 0
     finally:
         server.shutdown()
         server.server_close()
@@ -107,6 +133,27 @@ def test_hourly_endpoint_rejects_missing_project_id():
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             _get(f"{base}/v1/kst/hourly?date=2026-07-27")
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert payload == {"error": "project_id_required"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_daily_endpoint_rejects_missing_project_id():
+    server = create_server(
+        "127.0.0.1",
+        0,
+        service_factory=lambda project_id, target_date: FakeService(),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            _get(f"{base}/v1/kst/daily?date=2026-07-27")
         assert exc_info.value.code == 400
         payload = json.loads(exc_info.value.read().decode("utf-8"))
         assert payload == {"error": "project_id_required"}
