@@ -96,9 +96,9 @@ from gui.version import CURRENT_VERSION
 from modules.project_config import (
     get_data_source_preference,
     get_excel_path,
-    get_project_kst_data_source,
+    get_kst_data_source,
     load_project_config,
-    set_project_kst_data_source,
+    set_kst_data_source,
     set_data_source_preference as save_data_source_preference,
 )
 from modules.excel_path_config import EXCEL_ROOT_NAME, configure_excel_paths
@@ -605,6 +605,7 @@ class InlineConfigMenu(QFrame):
     restore_backup_requested = Signal()
     excel_path_config_requested = Signal()
     excel_auto_open_requested = Signal(bool)
+    kst_data_source_requested = Signal(str)
     pet_mode_requested = Signal(str)
     pet_scale_requested = Signal(float)
     exit_requested = Signal()
@@ -628,6 +629,30 @@ class InlineConfigMenu(QFrame):
         layout.addWidget(self._action_row("导出授权配置", self.export_secrets_requested.emit))
         layout.addWidget(self._action_row("恢复备份", self.restore_backup_requested.emit))
         layout.addWidget(self._action_row("Excel 路径配置", self.excel_path_config_requested.emit))
+        layout.addWidget(self._separator())
+
+        self.kst_mode_toggle = InlineMenuRow("快商通模式", expandable=True)
+        self.kst_mode_toggle.clicked.connect(self._toggle_kst_mode_section)
+        layout.addWidget(self.kst_mode_toggle)
+
+        self.kst_mode_section = QWidget()
+        self.kst_mode_section.setObjectName("inlineMenuSection")
+        kst_mode_layout = QVBoxLayout(self.kst_mode_section)
+        kst_mode_layout.setContentsMargins(10, 2, 0, 3)
+        kst_mode_layout.setSpacing(3)
+        self.kst_api_choice = self._choice_row(
+            "API 自动获取",
+            lambda: self.kst_data_source_requested.emit("local_api"),
+        )
+        self.kst_export_choice = self._choice_row(
+            "人工导出对话",
+            lambda: self.kst_data_source_requested.emit("export"),
+        )
+        kst_mode_layout.addWidget(self.kst_api_choice)
+        kst_mode_layout.addWidget(self.kst_export_choice)
+        self.kst_mode_section.hide()
+        layout.addWidget(self.kst_mode_section)
+
         layout.addWidget(self._separator())
 
         self.excel_auto_toggle = InlineMenuRow("Excel 自动打开", expandable=True)
@@ -814,6 +839,8 @@ class InlineConfigMenu(QFrame):
 
     def _toggle_pet_section(self) -> None:
         expanded = not self.pet_section.isVisible()
+        self.kst_mode_section.hide()
+        self.kst_mode_toggle.set_expanded(False)
         self.excel_auto_section.hide()
         self.excel_auto_toggle.set_expanded(False)
         self.pet_section.setVisible(expanded)
@@ -825,12 +852,26 @@ class InlineConfigMenu(QFrame):
 
     def _toggle_excel_auto_section(self) -> None:
         expanded = not self.excel_auto_section.isVisible()
+        self.kst_mode_section.hide()
+        self.kst_mode_toggle.set_expanded(False)
         self.pet_section.hide()
         self.pet_toggle.set_expanded(False)
         self.size_section.hide()
         self.size_toggle.set_expanded(False)
         self.excel_auto_section.setVisible(expanded)
         self.excel_auto_toggle.set_expanded(expanded)
+        self._refresh_height()
+
+    def _toggle_kst_mode_section(self) -> None:
+        expanded = not self.kst_mode_section.isVisible()
+        self.excel_auto_section.hide()
+        self.excel_auto_toggle.set_expanded(False)
+        self.pet_section.hide()
+        self.pet_toggle.set_expanded(False)
+        self.size_section.hide()
+        self.size_toggle.set_expanded(False)
+        self.kst_mode_section.setVisible(expanded)
+        self.kst_mode_toggle.set_expanded(expanded)
         self._refresh_height()
 
     def _toggle_size_section(self) -> None:
@@ -855,13 +896,32 @@ class InlineConfigMenu(QFrame):
             section_layout.invalidate()
             section_layout.activate()
             height += self.excel_auto_section.sizeHint().height()
+        if not self.kst_mode_section.isHidden():
+            section_layout = self.kst_mode_section.layout()
+            section_layout.invalidate()
+            section_layout.activate()
+            height += self.kst_mode_section.sizeHint().height()
         self.setFixedHeight(height)
 
-    def sync(self, pet_mode: str, pet_scale: float, excel_auto_open: bool) -> None:
+    def sync(
+        self,
+        pet_mode: str,
+        pet_scale: float,
+        excel_auto_open: bool,
+        kst_data_source: str = "local_api",
+    ) -> None:
         self._set_selected(self.clawd_choice, pet_mode == PET_CLAWD)
         self._set_selected(self.hidden_choice, pet_mode == PET_HIDDEN)
         self._set_selected(self.excel_start_choice, excel_auto_open)
         self._set_selected(self.excel_stop_choice, not excel_auto_open)
+        self._set_selected(
+            self.kst_api_choice,
+            kst_data_source == "local_api",
+        )
+        self._set_selected(
+            self.kst_export_choice,
+            kst_data_source == "export",
+        )
         value = round(normalize_pet_scale(pet_scale) * 100)
         self.size_slider.blockSignals(True)
         self.size_slider.setValue(value)
@@ -1577,6 +1637,7 @@ class MainWindow(QMainWindow):
         self.pending_update_archive: Path | None = None
         self.calendar_dialog: ModernCalendarDialog | None = None
         self.data_source_preference = get_data_source_preference(self.root)
+        self.kst_data_source = get_kst_data_source(self.root)
         self.open_excel_automatically = load_auto_open_excel(self.root)
         self._manual_update_check_requested = False
         self._task_stop_requested = False
@@ -1828,6 +1889,24 @@ class MainWindow(QMainWindow):
         self.system_config_menu.addAction(restore_backup_action)
         self.system_config_menu.addAction(excel_path_config_action)
         self.system_config_menu.addSeparator()
+        self.kst_mode_menu = QMenu("快商通模式", self.system_config_menu)
+        self.kst_mode_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.kst_mode_group = QActionGroup(self.kst_mode_menu)
+        self.kst_mode_group.setExclusive(True)
+        self.kst_api_action = QAction("API 自动获取", self.kst_mode_group)
+        self.kst_export_action = QAction("人工导出对话", self.kst_mode_group)
+        self.kst_api_action.setCheckable(True)
+        self.kst_export_action.setCheckable(True)
+        self.kst_api_action.triggered.connect(
+            lambda checked: checked and self.set_global_kst_data_source("local_api")
+        )
+        self.kst_export_action.triggered.connect(
+            lambda checked: checked and self.set_global_kst_data_source("export")
+        )
+        self.kst_mode_menu.addAction(self.kst_api_action)
+        self.kst_mode_menu.addAction(self.kst_export_action)
+        self.system_config_menu.addMenu(self.kst_mode_menu)
+        self.system_config_menu.addSeparator()
         self.excel_auto_open_menu = QMenu("Excel 自动打开", self.system_config_menu)
         self.excel_auto_open_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.excel_auto_open_group = QActionGroup(self.excel_auto_open_menu)
@@ -1861,6 +1940,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.exit_application)
         self.system_config_menu.addAction(exit_action)
         self._style_menu(self.system_config_menu, 236)
+        self._style_menu(self.kst_mode_menu, 206)
         self._style_menu(self.excel_auto_open_menu, 206)
         self._style_menu(self.pet_menu, 206)
         self.inline_config_menu = InlineConfigMenu(self)
@@ -1872,9 +1952,13 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.restore_backup_requested.connect(self.restore_backup)
         self.inline_config_menu.excel_path_config_requested.connect(self.configure_excel_paths_from_folder)
         self.inline_config_menu.excel_auto_open_requested.connect(self.set_excel_auto_open)
+        self.inline_config_menu.kst_data_source_requested.connect(
+            self.set_global_kst_data_source
+        )
         self.inline_config_menu.pet_mode_requested.connect(self.set_desktop_pet_mode)
         self.inline_config_menu.pet_scale_requested.connect(self.set_desktop_pet_scale)
         self.inline_config_menu.exit_requested.connect(self.exit_application)
+        self._sync_kst_mode_menu()
         self.system_config_button.clicked.connect(self.show_system_config_menu)
         title_layout.addWidget(self.system_config_button)
 
@@ -2222,17 +2306,6 @@ class MainWindow(QMainWindow):
         self.kst_status_control = self.log_view.status_control
         self.log_ready_dot = self.log_view.ready_dot
         self.log_ready_badge = self.log_view.ready_label
-        try:
-            kst_source_mode = get_project_kst_data_source(
-                self.root,
-                "kunming_niu",
-            )
-        except Exception:
-            kst_source_mode = "export"
-        self.kst_status_control.set_source_mode(kst_source_mode)
-        self.kst_status_control.source_selected.connect(
-            self.on_kst_source_selected
-        )
         content_layout.addWidget(self.log_view, 1)
 
     def _apply_style(self) -> None:
@@ -2865,7 +2938,12 @@ class MainWindow(QMainWindow):
         if self.inline_config_menu.isVisible():
             self.inline_config_menu.hide()
             return
-        self.inline_config_menu.sync(self.pet_mode, self.pet_scale, self.open_excel_automatically)
+        self.inline_config_menu.sync(
+            self.pet_mode,
+            self.pet_scale,
+            self.open_excel_automatically,
+            self.kst_data_source,
+        )
         self.inline_config_menu.popup_below(self.system_config_button)
 
     def show_help_menu(self) -> None:
@@ -3204,7 +3282,12 @@ class MainWindow(QMainWindow):
         self.clawd_pet_action.setChecked(self.pet_mode == PET_CLAWD)
         self.hidden_pet_action.setChecked(self.pet_mode == PET_HIDDEN)
         if hasattr(self, "inline_config_menu"):
-            self.inline_config_menu.sync(self.pet_mode, self.pet_scale, self.open_excel_automatically)
+            self.inline_config_menu.sync(
+                self.pet_mode,
+                self.pet_scale,
+                self.open_excel_automatically,
+                self.kst_data_source,
+            )
 
     def set_global_data_source_preference(self, preference: str) -> None:
         previous = self.data_source_preference
@@ -3229,23 +3312,30 @@ class MainWindow(QMainWindow):
                 emit=False,
             )
 
-    def on_kst_source_selected(self, mode: str) -> None:
+    def set_global_kst_data_source(self, mode: str) -> None:
+        previous = self.kst_data_source
         try:
-            set_project_kst_data_source(self.root, "kunming_niu", mode)
+            self.kst_data_source = set_kst_data_source(self.root, mode)
         except Exception:
-            try:
-                previous = get_project_kst_data_source(
-                    self.root,
-                    "kunming_niu",
-                )
-            except Exception:
-                previous = "export"
-            self.kst_status_control.set_source_mode(previous)
-            self.append_log("[失败] 商务通来源设置未保存，已继续使用原设置")
+            self.kst_data_source = previous
+            self._sync_kst_mode_menu()
+            self.append_log("[失败] 快商通模式未保存，已继续使用原设置")
             return
-        label = "API 自动获取" if mode == "local_api" else "人工导出"
-        self.kst_status_control.set_source_mode(mode)
-        self.append_log(f"[设置] 商务通来源已切换为{label}")
+        self._sync_kst_mode_menu()
+        label = "API 自动获取" if mode == "local_api" else "人工导出对话"
+        self.append_log(f"[设置] 快商通模式已切换为{label}")
+
+    def _sync_kst_mode_menu(self) -> None:
+        is_api = self.kst_data_source == "local_api"
+        self.kst_api_action.setChecked(is_api)
+        self.kst_export_action.setChecked(not is_api)
+        if hasattr(self, "inline_config_menu"):
+            self.inline_config_menu.sync(
+                getattr(self, "pet_mode", PET_CLAWD),
+                getattr(self, "pet_scale", 1.0),
+                self.open_excel_automatically,
+                self.kst_data_source,
+            )
 
     def start_kst_api(self) -> None:
         if self._kst_api_stopped:
@@ -3282,7 +3372,12 @@ class MainWindow(QMainWindow):
         enabled = bool(self.open_excel_automatically)
         self.excel_auto_start_action.setChecked(enabled)
         self.excel_auto_stop_action.setChecked(not enabled)
-        self.inline_config_menu.sync(self.pet_mode, self.pet_scale, enabled)
+        self.inline_config_menu.sync(
+            self.pet_mode,
+            self.pet_scale,
+            enabled,
+            self.kst_data_source,
+        )
 
     def set_desktop_pet_mode(self, mode: str) -> None:
         self.pet_mode = mode

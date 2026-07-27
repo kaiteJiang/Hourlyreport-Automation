@@ -9959,7 +9959,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.hourly_title.text() == "小时报"
     assert window.daily_title.text() == "日报"
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "Excel 自动打开", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "快商通模式", "Excel 自动打开", "桌面宠物", "退出程序"
     ]
     assert window.minimize_button.toolTip() == "最小化"
     assert window.maximize_button.toolTip() == "最大化"
@@ -10655,7 +10655,7 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统") + 12
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "Excel 自动打开", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "快商通模式", "Excel 自动打开", "桌面宠物", "退出程序"
     ]
     from gui.main_window import InlineMenuRow
     inline_labels = [row.text() for row in window.inline_config_menu.findChildren(InlineMenuRow)]
@@ -10664,7 +10664,11 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert "导入授权配置" in inline_labels
     assert "导出授权配置" in inline_labels
     assert "Excel 路径配置" in inline_labels
+    assert "快商通模式" in inline_labels
     assert "Excel 自动打开" in inline_labels
+    assert [action.text() for action in window.kst_mode_menu.actions()] == [
+        "API 自动获取", "人工导出对话"
+    ]
     assert [action.text() for action in window.excel_auto_open_menu.actions()] == ["启动", "停止"]
     assert [action.text() for action in window.pet_menu.actions() if not action.isSeparator()] == [
         "Clawd 小螃蟹", "隐藏宠物"
