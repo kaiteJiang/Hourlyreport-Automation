@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,6 +13,7 @@ from modules.kst_daily_parser import (
     default_daily_kst_date,
     empty_daily_kst_accounts,
 )
+from modules.kst_local.auth import load_or_create_local_token
 from modules.kst_parser import empty_kst_accounts
 from modules.kst_local.runtime import write_hourly_report
 from modules.validators import (
@@ -137,7 +137,7 @@ def fetch_kst_local_report(
         raise KstLocalSourceError(
             "商务通本地 API 令牌变量必须为 KST_LOCAL_API_TOKEN"
         )
-    token = os.environ.get("KST_LOCAL_API_TOKEN", "")
+    token = load_or_create_local_token(root)
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -160,6 +160,12 @@ def fetch_kst_local_report(
         expected_project_id = str(config.get("project_id") or "")
         if str(payload.get("project_id") or "") != expected_project_id:
             raise KstLocalSourceError("商务通本地 API 响应项目不匹配")
+        expected_date = target_date or date.today().isoformat()
+        if str(payload.get("date") or "") != expected_date:
+            raise KstLocalSourceError("商务通本地 API 响应日期不匹配")
+        expected_period = period or "15点"
+        if str(payload.get("period") or "") != expected_period:
+            raise KstLocalSourceError("商务通本地 API 响应时段不匹配")
         errors = payload.get("errors") or []
         if errors:
             raise KstLocalSourceError("商务通本地 API 返回校验错误")
@@ -338,7 +344,7 @@ def fetch_kst_local_daily_report(
         raise KstLocalSourceError(
             "商务通本地 API 令牌变量必须为 KST_LOCAL_API_TOKEN"
         )
-    token = os.environ.get("KST_LOCAL_API_TOKEN", "")
+    token = load_or_create_local_token(root)
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

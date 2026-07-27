@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from datetime import date
 from pathlib import Path
 
@@ -45,6 +44,7 @@ from modules.multi_project_runner import run_multi_project_pipeline
 from modules.multi_project_stop import resolve_multi_queue_stop_gate
 from modules.task_stop_gate import pipeline_exit_code
 from modules.kst_local.http_server import create_server
+from modules.kst_local.auth import load_or_create_local_token
 from modules.kst_local.runtime import build_live_runtime, write_hourly_report
 
 ROOT = Path(__file__).resolve().parent
@@ -190,9 +190,15 @@ def main() -> int | None:
                 kst_config.get("local_api_token_env")
                 or "KST_LOCAL_API_TOKEN"
             )
-            token = os.environ.get(token_env, "")
+            if token_env != "KST_LOCAL_API_TOKEN":
+                raise ValueError(
+                    "商务通本地 API 令牌变量必须为 KST_LOCAL_API_TOKEN"
+                )
+            token = load_or_create_local_token(ROOT)
 
-            def service_factory(request_date: str):
+            def service_factory(project_id: str, request_date: str):
+                if project_id != str(config.get("project_id") or ""):
+                    raise ValueError("商务通本地 API 项目不匹配")
                 return build_live_runtime(
                     config,
                     request_date,

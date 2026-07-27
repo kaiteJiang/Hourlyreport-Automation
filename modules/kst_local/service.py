@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import date
 from typing import Any
 
@@ -54,9 +55,17 @@ class KstConversationService:
         self._snapshot = snapshot
         self._candidates = candidates
         self._client = client
+        self._cache_lock = threading.RLock()
         self._cache: dict[str, tuple[KstConversation, ...]] = {}
 
     def collect(self, target_date: str) -> list[KstConversation]:
+        with self._cache_lock:
+            return self._collect_unlocked(target_date)
+
+    def _collect_unlocked(
+        self,
+        target_date: str,
+    ) -> list[KstConversation]:
         if target_date in self._cache:
             return list(self._cache[target_date])
         tag_map = (
@@ -66,6 +75,11 @@ class KstConversationService:
         )
         allowed = self._snapshot.sources_by_rec_id
         selected = [row for row in self._candidates if row.rec_id in allowed]
+        promotion_map = (
+            (self._config.get("kst") or {}).get("promotion_id_accounts") or {}
+        )
+        if not isinstance(promotion_map, dict) or not promotion_map:
+            raise KstServiceError("项目缺少商务通推广 ID 映射")
         conversations: list[KstConversation] = []
         for candidate in selected:
             try:
@@ -90,6 +104,8 @@ class KstConversationService:
                 )
                 if not promotion_id:
                     raise ValueError("promotion id missing")
+                if promotion_id not in promotion_map:
+                    raise ValueError("promotion id outside project mapping")
                 tags = tuple(
                     tag_map.get(tag_id, tag_id)
                     for tag_id in _tag_ids(card.get("cusTypeTag"))

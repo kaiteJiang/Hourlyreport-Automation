@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import date
 from pathlib import Path
 import threading
@@ -87,14 +87,20 @@ def _runtime_input_state(
     snapshot: AutomaticSourceSnapshot,
 ) -> tuple[Any, ...]:
     database_state: list[tuple[str, int, int]] = []
-    for path in installation.database_paths:
-        try:
-            stat = path.stat()
-            database_state.append(
-                (str(path), stat.st_size, stat.st_mtime_ns)
-            )
-        except OSError:
-            database_state.append((str(path), -1, -1))
+    for database_path in installation.database_paths:
+        related_paths = (
+            database_path,
+            database_path.with_name(database_path.name + "-wal"),
+            database_path.with_name(database_path.name + "-shm"),
+        )
+        for path in related_paths:
+            try:
+                stat = path.stat()
+                database_state.append(
+                    (str(path), stat.st_size, stat.st_mtime_ns)
+                )
+            except OSError:
+                database_state.append((str(path), -1, -1))
     return (
         str(installation.root),
         installation.identity,
@@ -122,6 +128,7 @@ class KstIdentityRegistry:
         endpoint_checker: Callable[[KstInstallation, str], bool] = _required_endpoints_available,
         promotion_cache_ttl_seconds: float = 300,
         runtime_cache_ttl_seconds: float = 60,
+        runtime_cache_max_entries: int = 64,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.root = Path(root)
@@ -142,11 +149,17 @@ class KstIdentityRegistry:
             0.0,
             float(runtime_cache_ttl_seconds),
         )
+        self._runtime_cache_max_entries = max(
+            1,
+            int(runtime_cache_max_entries),
+        )
+        self._state_lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
         self._runtime_lock = threading.RLock()
-        self._runtime_cache: dict[
+        self._runtime_cache: OrderedDict[
             tuple[str, str],
             tuple[float, Any, Any],
-        ] = {}
+        ] = OrderedDict()
         self._promotion_cache: dict[
             tuple[str, str, tuple[str, ...]],
             tuple[float, frozenset[str]],
@@ -185,6 +198,10 @@ class KstIdentityRegistry:
         return set(values)
 
     def refresh(self) -> None:
+        with self._refresh_lock:
+            self._refresh_unlocked()
+
+    def _refresh_unlocked(self) -> None:
         projects = self._projects_loader(self.root)
         project_map = {
             str(project.get("project_id") or ""): project
@@ -233,14 +250,32 @@ class KstIdentityRegistry:
                 bindings[project_id] = project_candidates[0]
             else:
                 project_errors[project_id] = "未找到匹配身份"
-        self._projects = project_map
-        self._identity_count = len(installations)
-        self._bindings = bindings
-        self._project_errors = project_errors
-        self._identity_error_count = identity_error_count
-        self._refreshed = True
+        with self._state_lock:
+            changed_projects = {
+                project_id
+                for project_id in set(self._bindings) | set(bindings)
+                if self._bindings.get(project_id) != bindings.get(project_id)
+            }
+            self._projects = project_map
+            self._identity_count = len(installations)
+            self._bindings = bindings
+            self._project_errors = project_errors
+            self._identity_error_count = identity_error_count
+            self._refreshed = True
+            if changed_projects:
+                with self._runtime_lock:
+                    for key in tuple(self._runtime_cache):
+                        if key[0] in changed_projects:
+                            self._runtime_cache.pop(key, None)
 
     def installation_for(self, project_id: str) -> KstInstallation:
+        with self._state_lock:
+            return self._installation_for_unlocked(project_id)
+
+    def _installation_for_unlocked(
+        self,
+        project_id: str,
+    ) -> KstInstallation:
         if not self._refreshed:
             raise KstIdentityMappingError("快商通身份注册表尚未刷新")
         installation = self._bindings.get(project_id)
@@ -252,7 +287,15 @@ class KstIdentityRegistry:
         return installation
 
     def build_runtime(self, project_id: str, target_date: str) -> Any:
-        installation = self.installation_for(project_id)
+        with self._state_lock:
+            return self._build_runtime_unlocked(project_id, target_date)
+
+    def _build_runtime_unlocked(
+        self,
+        project_id: str,
+        target_date: str,
+    ) -> Any:
+        installation = self._installation_for_unlocked(project_id)
         project = self._project_loader(self.root, project_id)
         snapshot = parse_cached_log_snapshot(
             installation.log_dir,
@@ -278,6 +321,7 @@ class KstIdentityRegistry:
                     0 <= age < self._runtime_cache_ttl_seconds
                     and cached_state == state
                 ):
+                    self._runtime_cache.move_to_end(key)
                     return runtime
             config = self._config_builder(project, {})
             runtime = self._runtime_builder(
@@ -287,9 +331,16 @@ class KstIdentityRegistry:
                 snapshot=snapshot,
             )
             self._runtime_cache[key] = (now, state, runtime)
+            self._runtime_cache.move_to_end(key)
+            while len(self._runtime_cache) > self._runtime_cache_max_entries:
+                self._runtime_cache.popitem(last=False)
             return runtime
 
     def health(self) -> dict[str, Any]:
+        with self._state_lock:
+            return self._health_unlocked()
+
+    def _health_unlocked(self) -> dict[str, Any]:
         all_project_ids = sorted(self._projects)
         bound_project_ids = sorted(self._bindings)
         unbound_project_ids = sorted(

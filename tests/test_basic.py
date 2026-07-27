@@ -9312,7 +9312,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.26.112",
+        version="2026.7.27.113",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -9321,9 +9321,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.26.112.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.27.113.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.26.112", online_update=True) == release.name
+    assert release_name("2026.7.27.113", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -11688,7 +11688,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.26.112"
+    assert CURRENT_VERSION == "2026.7.27.113"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
@@ -11696,13 +11696,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.26.113",
+        "tag_name": "v2026.7.27.114",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.26.113.zip",
+                "name": "Hourlyreport_automation_v2026.7.27.114.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11713,10 +11713,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.26.113"
+    assert update.version == "2026.7.27.114"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.26.113") is None
+    assert select_release_update(payload, "2026.7.27.114") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -11809,12 +11809,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.26.113",
+        "tag_name": "v2026.7.27.114",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.26.113.zip",
+                "name": "Hourlyreport_automation_v2026.7.27.114.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11842,7 +11842,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.26.113"]
+    assert [item.version for item in available] == ["2026.7.27.114"]
     assert ready == []
 
 

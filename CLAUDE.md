@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Windows 本地运行的百度竞价日报/小时报自动化工具。从百度营销后台读取展现/点击/消费，从快商通人工导出文件读取对话转化数据，写入本地 Excel。
+Windows 本地运行的百度竞价日报/小时报自动化工具。从百度营销后台读取展现/点击/消费，默认通过快商通本地只读 API 获取对话转化数据（可切人工导出），写入本地 Excel。
 
 当前版本 v2.0，不做 QQ、不做截图、不自动发送消息。
 

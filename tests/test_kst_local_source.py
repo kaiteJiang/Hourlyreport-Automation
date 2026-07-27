@@ -31,7 +31,8 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setenv("KST_LOCAL_API_TOKEN", "secret")
+    token = "source-test-token-with-more-than-32-characters"
+    monkeypatch.setenv("KST_LOCAL_API_TOKEN", token)
     calls = []
 
     def transport(url, headers, timeout):
@@ -70,7 +71,7 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
     assert parse_qs(urlparse(calls[0][0]).query)["project_id"] == [
         "kunming_niu"
     ]
-    assert calls[0][1]["Authorization"] == "Bearer secret"
+    assert calls[0][1]["Authorization"] == f"Bearer {token}"
     assert result["parse_report"]["passed"] is True
     output = tmp_path / "reports" / "kst_dialog_data.json"
     assert json.loads(output.read_text(encoding="utf-8"))["source"] == "kst_local_api"
@@ -178,6 +179,48 @@ def test_response_for_another_project_is_rejected_and_zeroed(tmp_path):
         for account in result["dialog_data"]["accounts"].values()
         for value in account.values()
     )
+
+
+@pytest.mark.parametrize(
+    ("response_date", "response_period"),
+    [
+        ("2026-07-26", "15点"),
+        ("2026-07-27", "18点"),
+    ],
+)
+def test_hourly_response_date_and_period_must_match_request(
+    tmp_path,
+    response_date,
+    response_period,
+):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+
+    result = fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        target_date="2026-07-27",
+        transport=lambda *_: {
+            "project_id": "kunming_niu",
+            "date": response_date,
+            "period": response_period,
+            "source": "kst_local_api",
+            "accounts": {
+                account: {
+                    "总对话": 99,
+                    "有效对话": 0,
+                    "一般有效": 0,
+                    "有效转潜": 0,
+                    "总转潜": 0,
+                }
+                for account in config["accounts"]
+            },
+            "errors": [],
+        },
+    )
+
+    assert result["dialog_data"]["source"] == "kst_local_api_unavailable_zero"
 
 
 def _daily_accounts(total=0):

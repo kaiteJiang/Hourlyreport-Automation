@@ -106,6 +106,63 @@ def test_incremental_cache_rebuilds_after_log_truncation(tmp_path: Path):
     assert cache.diagnostics()["full_rebuilds"] == 2
 
 
+def test_incremental_cache_rebuilds_after_same_path_log_replacement(
+    tmp_path: Path,
+):
+    log = tmp_path / "app.log"
+    log.write_text(
+        (
+            '[2026-07-27 09:00:00] websocket '
+            '{"msgType":48,"msgContent":[101]}\n'
+        ),
+        encoding="utf-8",
+    )
+    cache = IncrementalLogSnapshotCache()
+    cache.parse(tmp_path, "2026-07-27")
+
+    replacement = tmp_path / "replacement.log"
+    replacement.write_text(
+        (
+            '[2026-07-27 09:01:00] websocket '
+            '{"msgType":48,"msgContent":[202,203]}\n'
+        ),
+        encoding="utf-8",
+    )
+    replacement.replace(log)
+    rebuilt = cache.parse(tmp_path, "2026-07-27")
+
+    assert set(rebuilt.sources_by_rec_id) == {"202", "203"}
+    assert cache.diagnostics()["full_rebuilds"] == 2
+
+
+def test_log_snapshot_accepts_whitespace_around_push_message_type(
+    tmp_path: Path,
+):
+    log = tmp_path / "app.log"
+    log.write_text(
+        (
+            '[2026-07-27 09:00:00] websocket '
+            '{"msgType": 48, "msgContent": [301]}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(tmp_path, "2026-07-27")
+
+    assert set(snapshot.sources_by_rec_id) == {"301"}
+
+
+def test_incremental_cache_evicts_old_date_entries(tmp_path: Path):
+    (tmp_path / "app.log").write_text("", encoding="utf-8")
+    cache = IncrementalLogSnapshotCache(max_entries=2)
+
+    cache.parse(tmp_path, "2026-07-25")
+    cache.parse(tmp_path, "2026-07-26")
+    cache.parse(tmp_path, "2026-07-27")
+
+    assert cache.diagnostics()["entry_count"] == 2
+
+
 def test_log_snapshot_discovers_auth_and_endpoints_without_safe_token_leak(tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()

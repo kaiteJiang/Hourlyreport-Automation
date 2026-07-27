@@ -20,7 +20,7 @@ run_hermes_hourly.bat 18点
 
 1. 确认 GUI/菜单中的当前项目。
 2. 确认目标 Excel 已关闭。
-3. 确认快商通已导出本次文件；没有 30 分钟内文件时程序按 0 对话继续。
+3. 默认 API 模式确认快商通客户端已登录、GUI 的 `KST` 状态为绿色；人工导出模式才检查 30 分钟内文件。
 4. 调用对应时段的固定 BAT。
 5. 仅退出码 `0` 视为完成。
 6. 核对 `reports/final_run_report.json`、`reports/write_report.json` 和 `logs/run.log`。

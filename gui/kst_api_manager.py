@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import hmac
 import json
-import os
 import threading
 import time
 import urllib.error
@@ -12,6 +12,10 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from modules.kst_local.auth import (
+    load_or_create_local_token,
+    local_health_proof,
+)
 from modules.kst_local.http_server import create_server
 from modules.kst_local.identity_registry import KstIdentityRegistry
 
@@ -24,6 +28,10 @@ def probe_kst_health(
     token: str,
     timeout: float = 1.5,
 ) -> tuple[bool, str]:
+    try:
+        expected_proof = local_health_proof(token)
+    except Exception:
+        return False, "本地 API 令牌不可用"
     request = urllib.request.Request(
         f"{url.rstrip('/')}/health",
         headers={
@@ -48,6 +56,10 @@ def probe_kst_health(
         payload.get("status") == "ok"
         and payload.get("required_endpoints_available") is True
         and payload.get("project_routing") is True
+        and hmac.compare_digest(
+            str(payload.get("auth_proof") or ""),
+            expected_proof,
+        )
     ):
         return True, "127.0.0.1 本地 API 正常"
     return False, "商务通自动数据源尚未就绪"
@@ -302,7 +314,7 @@ class KstApiManager(QObject):
                     "商务通本地 API 必须使用 127.0.0.1:18766"
                 )
             port = parsed.port or 18766
-            token = os.environ.get("KST_LOCAL_API_TOKEN", "")
+            token = load_or_create_local_token(self._root)
             healthy, detail = self._probe_result(self._probe(url, token))
             if healthy:
                 with self._lock:

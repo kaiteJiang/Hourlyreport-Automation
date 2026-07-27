@@ -60,6 +60,7 @@ def registry_for(
     promotion_cache_ttl_seconds=300,
     runtime_state_reader=None,
     runtime_cache_ttl_seconds=60,
+    runtime_cache_max_entries=64,
     monotonic=None,
 ):
     installations = [
@@ -98,6 +99,7 @@ def registry_for(
         endpoint_checker=endpoint_checker,
         promotion_cache_ttl_seconds=promotion_cache_ttl_seconds,
         runtime_cache_ttl_seconds=runtime_cache_ttl_seconds,
+        runtime_cache_max_entries=runtime_cache_max_entries,
         **kwargs,
     )
 
@@ -241,6 +243,52 @@ def test_registry_rebuilds_runtime_on_state_change_or_ttl_expiry(tmp_path):
     assert first is not second
     assert second is not third
     assert calls == [1, 1, 1]
+
+
+def test_registry_evicts_old_runtime_dates(tmp_path):
+    calls = []
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        runtime_builder=lambda *_args, **_kwargs: (
+            calls.append(1) or HealthyRuntime()
+        ),
+        runtime_state_reader=lambda *_args: "stable",
+        runtime_cache_max_entries=2,
+    )
+    registry.refresh()
+
+    first = registry.build_runtime("a", "2026-07-25")
+    registry.build_runtime("a", "2026-07-26")
+    registry.build_runtime("a", "2026-07-27")
+    rebuilt = registry.build_runtime("a", "2026-07-25")
+
+    assert rebuilt is not first
+    assert calls == [1, 1, 1, 1]
+
+
+def test_registry_rebuilds_runtime_when_database_wal_changes(tmp_path):
+    database = tmp_path / "db" / "id-a" / "VISITOR.db"
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"database")
+    calls = []
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        runtime_builder=lambda *_args, **_kwargs: (
+            calls.append(1) or HealthyRuntime()
+        ),
+    )
+    registry.refresh()
+
+    first = registry.build_runtime("a", "2026-07-27")
+    database.with_name(database.name + "-wal").write_bytes(b"new rows")
+    second = registry.build_runtime("a", "2026-07-27")
+
+    assert second is not first
+    assert calls == [1, 1]
 
 
 def test_registry_with_no_binding_is_not_healthy(tmp_path):

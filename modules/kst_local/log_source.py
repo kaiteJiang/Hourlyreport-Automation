@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ class _SnapshotAccumulator:
             self.auth_date is None
             or line.startswith(f"[{self.auth_date} ")
         )
-        if source_line and '"msgType":48' in line:
+        if source_line:
             match = PUSH_BATCH_PATTERN.search(line)
             if match:
                 for rec_id in PUSH_REC_ID_PATTERN.findall(match.group(1)):
@@ -111,6 +112,8 @@ class _SnapshotAccumulator:
 class _FileCursor:
     offset: int = 0
     pending: bytes = b""
+    file_identity: tuple[int, int] | None = None
+    anchor: bytes = b""
 
 
 @dataclass
@@ -120,12 +123,13 @@ class _CacheEntry:
 
 
 class IncrementalLogSnapshotCache:
-    def __init__(self) -> None:
+    def __init__(self, *, max_entries: int = 32) -> None:
         self._lock = threading.RLock()
-        self._entries: dict[
+        self._max_entries = max(1, int(max_entries))
+        self._entries: OrderedDict[
             tuple[Path, str, str | None],
             _CacheEntry,
-        ] = {}
+        ] = OrderedDict()
         self._bytes_read = 0
         self._full_rebuilds = 0
 
@@ -142,8 +146,21 @@ class IncrementalLogSnapshotCache:
             return True
         for path in paths:
             try:
-                if path.stat().st_size < entry.cursors[path].offset:
+                cursor = entry.cursors[path]
+                stat = path.stat()
+                if stat.st_size < cursor.offset:
                     return True
+                identity = (stat.st_dev, stat.st_ino)
+                if (
+                    cursor.file_identity is not None
+                    and identity != cursor.file_identity
+                ):
+                    return True
+                if cursor.anchor:
+                    with path.open("rb") as stream:
+                        stream.seek(cursor.offset - len(cursor.anchor))
+                        if stream.read(len(cursor.anchor)) != cursor.anchor:
+                            return True
             except OSError:
                 return True
         return False
@@ -155,12 +172,15 @@ class IncrementalLogSnapshotCache:
     ) -> None:
         cursor = entry.cursors.setdefault(path, _FileCursor())
         with path.open("rb") as stream:
+            stat = path.stat()
             stream.seek(cursor.offset)
             appended = stream.read()
+        cursor.file_identity = (stat.st_dev, stat.st_ino)
         if not appended:
             return
         self._bytes_read += len(appended)
         cursor.offset += len(appended)
+        cursor.anchor = (cursor.anchor + appended)[-64:]
         combined = cursor.pending + appended
         cursor.pending = b""
         for raw_line in combined.splitlines(keepends=True):
@@ -207,6 +227,9 @@ class IncrementalLogSnapshotCache:
             else:
                 for path in paths:
                     self._consume_file(entry, path)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
             return entry.accumulator.snapshot(paths)
 
     def diagnostics(self) -> dict[str, int]:

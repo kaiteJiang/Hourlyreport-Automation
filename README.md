@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.26.112-3B82F6?style=for-the-badge" alt="Version 2026.7.26.112">
+  <img src="https://img.shields.io/badge/version-2026.7.27.113-3B82F6?style=for-the-badge" alt="Version 2026.7.27.113">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/data-API%20First-16A34A?style=for-the-badge" alt="API First">
   <img src="https://img.shields.io/badge/Excel-Backup%20%2B%20Verify-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -76,7 +76,7 @@
 | 模块 | 能力 | 关键保障 |
 |:--|:--|:--|
 | 百度数据 | API 优先，Chrome CDP 降级 | 刷新 1 次、网络额外重试 2 次、完整性额外读取 1 次，总预算 20 秒 |
-| 快商通数据 | 读取人工导出的 Excel/CSV | 按表头识别字段，不写死列号；无法归属的数据进入报告 |
+| 快商通数据 | 本地只读 API，支持切回人工导出 | 自动推送白名单、推广 ID 严格路由；失败按 0 且不偷读旧导出 |
 | 小时报 | 11 点、15 点、18 点 | 百度、快商通、合并、Excel 写入四阶段可追踪 |
 | 日报 | 默认昨天，也可指定日期 | 表格稳定性等待、基础完整性校验、写后复核 |
 | 多项目 | GUI 选择 1–3 个项目 | API 并行、Excel 串行；失败项目跳过，成功项目继续 |
@@ -95,7 +95,7 @@ flowchart LR
     API -->|"成功"| BD["百度标准数据"]
     API -->|"自修复后仍失败"| CH["Chrome CDP"]
     CH --> BD
-    KST["快商通人工导出<br/>Excel / CSV"] --> KP["表头识别与账户归类"]
+    KST["快商通本地 API<br/>或人工导出"] --> KP["自动来源校验与账户归类"]
     BD --> M["按项目 · 日期 · 时段合并"]
     KP --> M
     M --> V["完整性校验"]
@@ -130,7 +130,7 @@ flowchart TD
 管理员只需分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.26.112.exe
+Hourlyreport_automation_setup_v2026.7.27.113.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动自动检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -277,15 +277,15 @@ hourly_report_bot_release_v0.4.4/
 
 <table>
   <tr>
-    <td><strong>当前基线</strong><br><code>2026.7.26.112</code></td>
-    <td><strong>Release Tag</strong><br><code>v2026.7.26.112</code></td>
+    <td><strong>当前基线</strong><br><code>2026.7.27.113</code></td>
+    <td><strong>Release Tag</strong><br><code>v2026.7.27.113</code></td>
     <td><strong>更新仓库</strong><br><a href="https://github.com/kaiteJiang/Hourlyreport-Automation">Hourlyreport-Automation</a></td>
   </tr>
 </table>
 
 ```text
-在线更新包：Hourlyreport_automation_v2026.7.26.112.zip
-完整安装器：Hourlyreport_automation_setup_v2026.7.26.112.exe
+在线更新包：Hourlyreport_automation_v2026.7.27.113.zip
+完整安装器：Hourlyreport_automation_setup_v2026.7.27.113.exe
 ```
 
 版本号规则为 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/` 和 `browser_profile/`。
@@ -294,6 +294,7 @@ hourly_report_bot_release_v0.4.4/
 
 | 版本 | 重点 |
 |:--|:--|
+| `2026.7.27.113` | 快商通本地 API 覆盖小时报与日报；多身份路由、缓存、安全认证及性能优化 |
 | `2026.7.26.112` | 修复旧客户端云端 Token 配置误判及百度阶段无法即时停止 |
 | `2026.7.23.111` | 修复更新助手缺失模块导致“更新并重启”崩溃 |
 | `2026.7.23.110` | 修复云端 Token 时区解析与多授权并发覆盖；更新 GitHub 用户名 |

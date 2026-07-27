@@ -1,3 +1,9 @@
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
     KstAuthContext,
@@ -150,6 +156,62 @@ def test_service_fails_instead_of_turning_query_failure_into_zero():
         assert "101" in str(exc)
     else:
         raise AssertionError("KstServiceError was not raised")
+
+
+def test_service_rejects_automatic_conversation_outside_project_mapping():
+    candidates = [
+        KstCacheCandidate(
+            rec_id="101",
+            start_time="2026-07-27 08:59:58",
+            promotion_id="99999999",
+            visitor_messages=1,
+        )
+    ]
+
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=candidates,
+        client=FakeClient(),
+    )
+
+    with pytest.raises(KstServiceError, match="101"):
+        service.collect("2026-07-27")
+
+
+def test_service_collect_is_single_flight_for_shared_runtime():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingClient(FakeClient):
+        def load_visitor(self, rec_id):
+            self.visitor_calls.append(rec_id)
+            if len(self.visitor_calls) == 1:
+                started.set()
+                release.wait(timeout=2)
+            return {
+                "visitorId": f"visitor-{rec_id}",
+                "curEnterTime": "2026-07-27 09:00:00",
+                "visitorSendNum": 2,
+            }
+
+    client = BlockingClient()
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=_candidates(),
+        client=client,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(service.collect, "2026-07-27")
+        assert started.wait(timeout=1)
+        second = executor.submit(service.collect, "2026-07-27")
+        time.sleep(0.05)
+        release.set()
+        assert first.result(timeout=2) == second.result(timeout=2)
+
+    assert client.visitor_calls == ["101"]
 
 
 def test_service_uses_cached_log_tags_when_live_tag_endpoint_is_unavailable():

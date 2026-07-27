@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from modules.kst_local.auth import local_health_proof
+
 
 ServiceFactory = Callable[[str, str], Any]
 HealthProvider = Callable[[], dict[str, Any]]
@@ -22,6 +24,8 @@ def create_server(
 ) -> ThreadingHTTPServer:
     if host != "127.0.0.1":
         raise ValueError("商务通本地 API 只允许绑定 127.0.0.1")
+
+    health_proof = local_health_proof(token)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "KstLocalApi/1.0"
@@ -47,6 +51,10 @@ def create_server(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if not self._authorized():
+                self._send(401, {"error": "unauthorized"})
+                return
+
             if parsed.path == "/health":
                 try:
                     payload = (
@@ -54,13 +62,11 @@ def create_server(
                         if health_provider is not None
                         else {"status": "ok"}
                     )
+                    payload = dict(payload)
+                    payload["auth_proof"] = health_proof
                     self._send(200, payload)
                 except Exception:
                     self._send(503, {"status": "not_ready"})
-                return
-
-            if not self._authorized():
-                self._send(401, {"error": "unauthorized"})
                 return
 
             query = parse_qs(parsed.query)
@@ -73,6 +79,14 @@ def create_server(
                 project_id = str(query.get("project_id", [""])[0]).strip()
                 if not project_id:
                     self._send(400, {"error": "project_id_required"})
+                    return
+                try:
+                    parsed_date = date.fromisoformat(target_date)
+                except ValueError:
+                    self._send(400, {"error": "invalid_date"})
+                    return
+                if parsed_date.isoformat() != target_date:
+                    self._send(400, {"error": "invalid_date"})
                     return
             else:
                 project_id = ""

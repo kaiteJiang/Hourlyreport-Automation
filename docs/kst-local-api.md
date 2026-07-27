@@ -67,12 +67,13 @@ API 模式下，某项目出现未绑定、歧义、服务不可用或响应不�
 
 人工恢复只能显式选择 `系统 > 快商通模式 > 人工导出对话`。人工模式继续使用原有最近导出文件流程，并且不会调用本地 API。
 
-客户端请求地址和令牌变量固定为 `http://127.0.0.1:18766` 与 `KST_LOCAL_API_TOKEN`，项目配置不能把令牌转发给其他本机端口。
+客户端请求地址固定为 `http://127.0.0.1:18766`。令牌优先读取 `KST_LOCAL_API_TOKEN`；未设置时自动生成到被 Git 和发布包排除的 `runtime/kst_local_api_token`，供同一安装目录下的 GUI 与 HERMES/CLI 安全复用。健康检查与数据接口都必须通过令牌认证，项目配置不能把令牌转发给其他本机端口。
 
 ## 健康检查
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:18766/health
+$kstToken = (Get-Content runtime\kst_local_api_token -Raw).Trim()
+Invoke-RestMethod http://127.0.0.1:18766/health -Headers @{Authorization = "Bearer $kstToken"}
 ```
 
 关键字段：

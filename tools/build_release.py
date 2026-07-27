@@ -180,6 +180,9 @@ def _source_fingerprint(root: Path) -> str:
     for folder in (root / "gui", root / "modules"):
         if folder.is_dir():
             candidates.extend(folder.rglob("*.py"))
+    kst_resources = root / "modules" / "kst_local" / "resources"
+    if kst_resources.is_dir():
+        candidates.extend(kst_resources.rglob("*"))
     candidates.extend(
         (root / "assets" / name)
         for name in ("app_icon.ico", "app_icon.png", "app_icon_exe.png")

@@ -6,6 +6,8 @@ import urllib.request
 
 from modules.kst_local.http_server import create_server
 
+TEST_TOKEN = "multi-identity-token-with-more-than-32-characters"
+
 
 class ProjectService:
     def __init__(self, project_id):
@@ -29,6 +31,7 @@ def test_three_projects_are_routed_without_cross_read():
             calls.append((project_id, target_date))
             or ProjectService(project_id)
         ),
+        token=TEST_TOKEN,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -36,9 +39,13 @@ def test_three_projects_are_routed_without_cross_read():
     try:
         responses = {}
         for project_id in ("project_a", "project_b", "project_c"):
-            with urllib.request.urlopen(
+            request = urllib.request.Request(
                 f"{base}/v1/kst/hourly?project_id={project_id}"
                 "&date=2026-07-27&period=15%E7%82%B9",
+                headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+            )
+            with urllib.request.urlopen(
+                request,
                 timeout=3,
             ) as response:
                 responses[project_id] = json.loads(
