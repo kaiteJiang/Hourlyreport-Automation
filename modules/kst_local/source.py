@@ -142,6 +142,9 @@ def fetch_kst_local_report(
             raise KstLocalSourceError("商务通本地 API 响应结构不兼容")
         if payload.get("source") != "kst_local_api":
             raise KstLocalSourceError("商务通本地 API 响应来源不可信")
+        expected_project_id = str(config.get("project_id") or "")
+        if str(payload.get("project_id") or "") != expected_project_id:
+            raise KstLocalSourceError("商务通本地 API 响应项目不匹配")
         errors = payload.get("errors") or []
         if errors:
             raise KstLocalSourceError("商务通本地 API 返回校验错误")

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -62,6 +63,9 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
     assert calls[0][0].startswith(
         "http://127.0.0.1:18766/v1/kst/hourly?"
     )
+    assert parse_qs(urlparse(calls[0][0]).query)["project_id"] == [
+        "kunming_niu"
+    ]
     assert calls[0][1]["Authorization"] == "Bearer secret"
     assert result["parse_report"]["passed"] is True
     output = tmp_path / "reports" / "kst_dialog_data.json"
@@ -127,3 +131,36 @@ def test_incomplete_api_accounts_use_zero_fallback_when_opted_in(tmp_path):
 
     assert result["dialog_data"]["source"] == "kst_local_api_unavailable_zero"
     assert result["dialog_data"]["summary"]["api_unavailable"] is True
+
+
+def test_response_for_another_project_is_rejected_and_zeroed(tmp_path):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+
+    result = fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        transport=lambda *_: {
+            "project_id": "another_project",
+            "source": "kst_local_api",
+            "accounts": {
+                account: {
+                    "总对话": 99,
+                    "有效对话": 99,
+                    "一般有效": 99,
+                    "有效转潜": 99,
+                    "总转潜": 99,
+                }
+                for account in config["accounts"]
+            },
+            "errors": [],
+        },
+    )
+
+    assert result["dialog_data"]["source"] == "kst_local_api_unavailable_zero"
+    assert all(
+        value == 0
+        for account in result["dialog_data"]["accounts"].values()
+        for value in account.values()
+    )

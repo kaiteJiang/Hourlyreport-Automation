@@ -193,8 +193,54 @@ def _runtime_config(project_id: str, excel_name: str | None = None) -> dict:
         "excel_path": str(excel_name or f"{project_id}.xlsx"),
         "accounts": {f"{project_id}-账户": {}},
         "baidu": {},
-        "kst": {},
+        "kst": {
+            "data_source": "local_api",
+            "allow_zero_on_unavailable": True,
+        },
     }
+
+
+def test_three_project_run_keeps_each_kst_request_scoped(tmp_path):
+    from modules.multi_project_runner import run_multi_project_pipeline
+
+    requested = []
+    project_ids = ["project_a", "project_b", "project_c"]
+
+    report = run_multi_project_pipeline(
+        root=tmp_path,
+        logger=logging.getLogger("test-multi-kst-scope"),
+        project_ids=project_ids,
+        task="hourly",
+        period="15点",
+        runtime_config_loader=lambda _root, project_id: _runtime_config(project_id),
+        credential_checker=lambda *_args: {"passed": True},
+        api_fetch_hourly=lambda config, **_kwargs: {
+            "accounts": {config["project_id"]: {}},
+            "errors": [],
+            "data_source": "api",
+        },
+        hourly_pipeline=lambda config, **_kwargs: (
+            requested.append(
+                (
+                    config["project_id"],
+                    config["kst"]["data_source"],
+                    config["kst"]["allow_zero_on_unavailable"],
+                )
+            )
+            or {
+                "passed": True,
+                "excel_path": config["excel_path"],
+                "errors": [],
+            }
+        ),
+    )
+
+    assert requested == [
+        ("project_a", "local_api", True),
+        ("project_b", "local_api", True),
+        ("project_c", "local_api", True),
+    ]
+    assert report["summary"]["success"] == 3
 
 
 def test_multi_project_runner_overlaps_api_but_serializes_pipelines_in_selection_order(tmp_path):
