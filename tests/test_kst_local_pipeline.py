@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from modules.project_config import build_runtime_config_from_project
-from modules.run_pipeline import run_half_auto_pipeline
+from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
 
 
 class Logger:
@@ -137,6 +137,63 @@ def test_hourly_pipeline_accepts_api_zero_fallback_and_warns(tmp_path):
 
     assert report["passed"] is True
     assert any("API 不可用" in warning and "按 0 继续" in warning for warning in logger.warnings)
+
+
+def test_daily_pipeline_uses_local_api_without_parsing_export(tmp_path):
+    calls = {"local": 0, "export": 0}
+
+    def fetch_local(config, root, target_date=None):
+        calls["local"] += 1
+        assert config["project_id"] == "kunming_niu"
+        assert target_date == "2026-07-26"
+        return {
+            "daily_data": {
+                "project_id": "kunming_niu",
+                "date": "2026-07-26",
+                "source": "kst_local_api",
+            },
+            "parse_report": {"passed": True, "errors": []},
+            "outputs": {
+                "daily_data": str(root / "reports" / "kst_daily_data.json")
+            },
+        }
+
+    def parse_export(*args, **kwargs):
+        calls["export"] += 1
+        raise AssertionError("API 模式不得解析人工导出")
+
+    report = run_daily_pipeline(
+        config=_config(),
+        root=tmp_path,
+        logger=Logger(),
+        target_date="2026-07-26",
+        kst_file=None,
+        fetch_baidu_func=lambda **kwargs: {
+            "date": "2026-07-26",
+            "data_source": "api",
+            "errors": [],
+        },
+        parse_kst_func=parse_export,
+        fetch_kst_local_func=fetch_local,
+        merge_func=lambda **kwargs: {
+            "merged": {"date": "2026-07-26"},
+            "validate_report": {"passed": True, "errors": []},
+            "outputs": {},
+        },
+        write_func=lambda **kwargs: {
+            "date": "2026-07-26",
+            "excel_path": str(tmp_path / "fake.xlsx"),
+            "writes": [],
+            "overwrite_summary": {"overwrite_count": 0},
+            "self_check": {"verification_passed": True},
+            "errors": [],
+        },
+    )
+
+    assert report["passed"] is True
+    assert report["kst_data_source"] == "local_api"
+    assert calls == {"local": 1, "export": 0}
+    assert report["steps"][1]["name"] == "fetch-kst-local-daily"
 
 
 def test_runtime_config_preserves_kst_local_api_fields():

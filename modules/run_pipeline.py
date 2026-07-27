@@ -18,7 +18,10 @@ from modules.data_merger import merge_daily_files, merge_data_files, normalize_p
 from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
 from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
 from modules.kst_export_parser import auto_export_max_age_seconds, find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
-from modules.kst_local.source import fetch_kst_local_report
+from modules.kst_local.source import (
+    fetch_kst_local_daily_report,
+    fetch_kst_local_report,
+)
 from modules.task_stop_gate import claim_excel_write, task_stop_requested
 
 
@@ -472,14 +475,24 @@ def run_daily_pipeline(
     today: date | None = None,
     fetch_baidu_func: StepFunc = fetch_baidu_resilient_daily,
     parse_kst_func: Callable[..., dict[str, Any]] = parse_kst_daily_file,
+    fetch_kst_local_func: Callable[..., dict[str, Any]] = fetch_kst_local_daily_report,
     merge_func: StepFunc = merge_daily_files,
     write_func: StepFunc = write_merged_daily_data,
 ) -> dict[str, Any]:
     daily_date = target_date or _default_yesterday(today)
-    auto_discovered = kst_file is None
+    kst_data_source = str(
+        config.get("kst", {}).get("data_source") or "export"
+    ).strip().lower()
+    if kst_data_source not in {"export", "local_api"}:
+        raise ValueError(f"不支持的商务通数据源：{kst_data_source}")
+    auto_discovered = kst_file is None and kst_data_source == "export"
     max_age_hours = _max_age_hours_for_info(config)
-    export_file = _resolve_path(root, kst_file)
-    if export_file is None:
+    export_file = (
+        _resolve_path(root, kst_file)
+        if kst_data_source == "export"
+        else None
+    )
+    if export_file is None and kst_data_source == "export":
         export_file = find_latest_kst_export(root, config)
     kst_export_info = _file_info(export_file, auto_discovered, max_age_hours)
     excel_path = _resolve_path(root, config.get("excel_path"))
@@ -499,6 +512,7 @@ def run_daily_pipeline(
         "backup_path": None,
         "kst_export_file": str(export_file or ""),
         "kst_export": kst_export_info,
+        "kst_data_source": kst_data_source,
         "baidu_source_ok": False,
         "data_source": None,
         "api_attempts": 0,
@@ -577,8 +591,58 @@ def run_daily_pipeline(
     if stopped:
         return stopped
 
-    print_step(2, 4, "解析商务通日报导出文件")
-    if export_file is None:
+    print_step(
+        2,
+        4,
+        "读取商务通本地 API 日报" if kst_data_source == "local_api" else "解析商务通日报导出文件",
+    )
+    if kst_data_source == "local_api":
+        try:
+            kst_result = fetch_kst_local_func(
+                config,
+                root,
+                target_date=daily_date,
+            )
+        except Exception as exc:
+            errors = [str(exc)]
+            report["steps"].append(
+                _step_result("fetch-kst-local-daily", False, errors=errors)
+            )
+            print_step_failure(
+                "商务通本地 API 日报读取异常",
+                suggestion=str(exc),
+                log_path=str(root / "logs" / "run.log"),
+            )
+            return fail("fetch-kst-local-daily", errors)
+        kst_parse_report = kst_result.get("parse_report", {})
+        kst_errors = _errors_from_report(kst_parse_report)
+        kst_passed = bool(kst_parse_report.get("passed")) and not kst_errors
+        report["steps"].append(
+            _step_result(
+                "fetch-kst-local-daily",
+                kst_passed,
+                outputs=kst_result.get("outputs", {}),
+                errors=kst_errors,
+            )
+        )
+        report["outputs"].update(kst_result.get("outputs", {}))
+        if not kst_passed:
+            print_step_failure(
+                "商务通本地 API 日报校验未通过",
+                suggestion="；".join(kst_errors),
+                log_path=str(root / "logs" / "run.log"),
+            )
+            return fail("fetch-kst-local-daily", kst_errors)
+        if (
+            kst_result.get("daily_data", {}).get("source")
+            == "kst_local_api_unavailable_zero"
+        ):
+            logger.warning("商务通 API 不可用，日报已按 0 继续")
+            print_step_success("商务通 API 不可用，日报已按 0 继续")
+        else:
+            print_step_success("商务通自动来源日报数据已读取")
+        logger.info("日报一键流步骤完成：fetch-kst-local-daily")
+    elif export_file is None:
         reason = "未找到 30 分钟内的商务通日报导出文件，按 0 对话处理"
         kst_result = write_empty_kst_daily_result(config, root, daily_date, reason)
         report["steps"].append(_step_result("parse-kst-daily", True, outputs=kst_result.get("outputs", {})))
