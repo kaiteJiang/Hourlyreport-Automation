@@ -506,10 +506,16 @@ def test_multi_project_runner_requires_api_authorization_not_browser_password(tm
             {
                 "baidu_api": {
                     "project_a_api": {
+                        "app_id": "app-1",
                         "access_token": "access",
                         "refresh_token": "refresh",
                     }
-                }
+                },
+                "baidu_api_gateway": {
+                    "app_id": "app-1",
+                    "client_key": "test-client",
+                    "token_url": "https://example.invalid/token",
+                },
             }
         ),
         encoding="utf-8",
