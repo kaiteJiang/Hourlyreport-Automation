@@ -59,7 +59,10 @@ def _latest_log_mtime(log_dir: Path) -> float:
     return max((path.stat().st_mtime for path in files), default=log_dir.stat().st_mtime)
 
 
-def _discover_identity(local_app_data: Path) -> tuple[str, Path, tuple[Path, ...]]:
+def _discover_identity(
+    local_app_data: Path,
+    explicit_identity: str | None = None,
+) -> tuple[str, Path, tuple[Path, ...]]:
     data_root = local_app_data / "OnlineWebCSNew"
     log_root = data_root / "log"
     db_root = data_root / "db"
@@ -92,6 +95,17 @@ def _discover_identity(local_app_data: Path) -> tuple[str, Path, tuple[Path, ...
         raise KstDiscoveryError(
             f"未找到同时具有日志和 VISITOR.db 的商务通身份目录：{data_root}"
         )
+    if explicit_identity:
+        selected = next(
+            (item for item in candidates if item[1] == explicit_identity),
+            None,
+        )
+        if selected is None:
+            raise KstDiscoveryError(
+                f"显式配置的商务通身份不存在或缺少数据文件：{explicit_identity}"
+            )
+        _, identity, log_dir, database_paths = selected
+        return identity, log_dir, database_paths
     _, identity, log_dir, database_paths = max(candidates, key=lambda item: item[0])
     return identity, log_dir, database_paths
 
@@ -99,6 +113,7 @@ def _discover_identity(local_app_data: Path) -> tuple[str, Path, tuple[Path, ...
 def discover_installation(
     explicit_root: str | Path | None = None,
     local_app_data: str | Path | None = None,
+    explicit_identity: str | None = None,
 ) -> KstInstallation:
     if explicit_root is not None:
         try:
@@ -125,7 +140,10 @@ def discover_installation(
         if local_app_data is not None
         else os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
     ).expanduser().resolve()
-    identity, log_dir, database_paths = _discover_identity(local_root)
+    identity, log_dir, database_paths = _discover_identity(
+        local_root,
+        explicit_identity=explicit_identity,
+    )
     return KstInstallation(
         root=root,
         electron=electron,
