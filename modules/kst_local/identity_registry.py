@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import discover_installations
-from modules.kst_local.log_source import parse_log_snapshot
+from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import KstInstallation
 from modules.kst_local.runtime import build_live_runtime
 from modules.project_config import (
@@ -71,7 +71,7 @@ def _required_endpoints_available(
     installation: KstInstallation,
     target_date: str,
 ) -> bool:
-    snapshot = parse_log_snapshot(
+    snapshot = parse_cached_log_snapshot(
         installation.log_dir,
         target_date,
         auth_date=target_date,

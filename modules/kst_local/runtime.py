@@ -9,7 +9,7 @@ from typing import Any
 from modules.kst_local.api_client import KstApiClient
 from modules.kst_local.db_reader import read_cache_candidates
 from modules.kst_local.discovery import discover_installation
-from modules.kst_local.log_source import parse_log_snapshot
+from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import AutomaticSourceSnapshot, KstInstallation
 from modules.kst_local.service import KstConversationService
 
@@ -45,7 +45,7 @@ def build_live_runtime(
             explicit_root=installation_root or kst_config.get("installation_root"),
             explicit_identity=kst_config.get("identity"),
         )
-    snapshot = parse_log_snapshot(
+    snapshot = parse_cached_log_snapshot(
         installation.log_dir,
         target_date,
         auth_date=date.today().isoformat(),

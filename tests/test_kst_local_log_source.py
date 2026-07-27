@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from modules.kst_local.log_source import parse_log_snapshot
+from modules.kst_local.log_source import (
+    IncrementalLogSnapshotCache,
+    parse_log_snapshot,
+)
 
 
 def test_log_snapshot_only_whitelists_automatic_sources(tmp_path: Path):
@@ -27,6 +30,80 @@ def test_log_snapshot_only_whitelists_automatic_sources(tmp_path: Path):
     assert snapshot.sources_by_rec_id["101"] == frozenset({"websocket_msg_type_48"})
     assert snapshot.sources_by_rec_id["202"] == frozenset({"startup_auto_sync"})
     assert "999" not in snapshot.sources_by_rec_id
+
+
+def test_log_snapshot_whitelists_every_rec_id_in_one_push_batch(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        (
+            '[2026-07-27 13:32:19] websocket '
+            '{"msgType":48,"msgContent":[101,202,303]}'
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-07-27")
+
+    assert set(snapshot.sources_by_rec_id) == {"101", "202", "303"}
+    assert all(
+        source_names == frozenset({"websocket_msg_type_48"})
+        for source_names in snapshot.sources_by_rec_id.values()
+    )
+
+
+def test_incremental_cache_reads_only_appended_log_bytes(tmp_path: Path):
+    log = tmp_path / "app.log"
+    first = (
+        '[2026-07-27 09:00:00] websocket '
+        '{"msgType":48,"msgContent":[101]}\n'
+    )
+    second = (
+        '[2026-07-27 09:01:00] websocket '
+        '{"msgType":48,"msgContent":[202]}\n'
+    )
+    log.write_text(first, encoding="utf-8")
+    cache = IncrementalLogSnapshotCache()
+
+    initial = cache.parse(tmp_path, "2026-07-27")
+    before = cache.diagnostics()["bytes_read"]
+    size_before = log.stat().st_size
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(second)
+    appended_bytes = log.stat().st_size - size_before
+    updated = cache.parse(tmp_path, "2026-07-27")
+
+    assert set(initial.sources_by_rec_id) == {"101"}
+    assert set(updated.sources_by_rec_id) == {"101", "202"}
+    assert (
+        cache.diagnostics()["bytes_read"] - before
+        == appended_bytes
+    )
+
+
+def test_incremental_cache_rebuilds_after_log_truncation(tmp_path: Path):
+    log = tmp_path / "app.log"
+    log.write_text(
+        (
+            '[2026-07-27 09:00:00] websocket '
+            '{"msgType":48,"msgContent":[101,102]}\n'
+        ),
+        encoding="utf-8",
+    )
+    cache = IncrementalLogSnapshotCache()
+    cache.parse(tmp_path, "2026-07-27")
+
+    log.write_text(
+        (
+            '[2026-07-27 09:01:00] websocket '
+            '{"msgType":48,"msgContent":[202]}\n'
+        ),
+        encoding="utf-8",
+    )
+    rebuilt = cache.parse(tmp_path, "2026-07-27")
+
+    assert set(rebuilt.sources_by_rec_id) == {"202"}
+    assert cache.diagnostics()["full_rebuilds"] == 2
 
 
 def test_log_snapshot_discovers_auth_and_endpoints_without_safe_token_leak(tmp_path: Path):
