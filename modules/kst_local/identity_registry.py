@@ -156,6 +156,7 @@ class KstIdentityRegistry:
         return {
             "status": "ok" if self._refreshed else "not_ready",
             "required_endpoints_available": self._refreshed,
+            "project_routing": True,
             "identity_count": self._identity_count,
             "bound_project_ids": bound_project_ids,
             "unbound_project_ids": unbound_project_ids,

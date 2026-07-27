@@ -26,16 +26,25 @@ def wait_until(predicate, timeout=2.0):
 class FakeRuntime:
     service = object()
 
+
+class FakeRegistry:
+    def __init__(self, *_args):
+        self.refresh_calls = 0
+
+    def refresh(self):
+        self.refresh_calls += 1
+
     def health(self):
         return {
             "status": "ok",
             "required_endpoints_available": True,
         }
 
+    def build_runtime(self, project_id, target_date):
+        return FakeRuntime()
 
-class NotReadyRuntime:
-    service = object()
 
+class NotReadyRegistry(FakeRegistry):
     def health(self):
         return {
             "status": "not_ready",
@@ -63,15 +72,7 @@ class FakeServer:
 def _manager(tmp_path, **kwargs):
     return KstApiManager(
         tmp_path,
-        project_loader=lambda *_: {
-            "project_id": "kunming_niu",
-            "kst": {
-                "local_api_url": "http://127.0.0.1:18766",
-                "local_api_token_env": "TEST_KST_TOKEN",
-            },
-        },
-        config_builder=lambda project, base: project,
-        runtime_builder=lambda *_args, **_kwargs: FakeRuntime(),
+        registry_factory=FakeRegistry,
         **kwargs,
     )
 
@@ -133,12 +134,7 @@ def test_not_ready_runtime_never_turns_status_green(qapp, tmp_path):
     factory_calls = []
     manager = KstApiManager(
         tmp_path,
-        project_loader=lambda *_: {
-            "project_id": "kunming_niu",
-            "kst": {"local_api_url": "http://127.0.0.1:18766"},
-        },
-        config_builder=lambda project, base: project,
-        runtime_builder=lambda *_args, **_kwargs: NotReadyRuntime(),
+        registry_factory=NotReadyRegistry,
         probe=lambda *_: False,
         server_factory=lambda *_args, **_kwargs: factory_calls.append(1),
         retry_interval_ms=20,

@@ -42,7 +42,7 @@ def test_server_binds_loopback_authenticates_and_returns_safe_payload():
     server = create_server(
         "127.0.0.1",
         0,
-        service_factory=lambda target_date: FakeService(),
+        service_factory=lambda project_id, target_date: FakeService(),
         health_provider=lambda: {"status": "ok", "version": "9.86.21"},
         token="local-secret",
     )
@@ -59,7 +59,7 @@ def test_server_binds_loopback_authenticates_and_returns_safe_payload():
         assert exc_info.value.code == 401
 
         status, conversations = _get(
-            f"{base}/v1/kst/conversations?date=2026-07-27",
+            f"{base}/v1/kst/conversations?project_id=kunming_niu&date=2026-07-27",
             token="local-secret",
         )
         assert status == 200
@@ -75,7 +75,7 @@ def test_server_binds_loopback_authenticates_and_returns_safe_payload():
         }.intersection(row)
 
         status, hourly = _get(
-            f"{base}/v1/kst/hourly?date=2026-07-27&period=15%E7%82%B9",
+            f"{base}/v1/kst/hourly?project_id=kunming_niu&date=2026-07-27&period=15%E7%82%B9",
             token="local-secret",
         )
         assert hourly["source"] == "kst_local_api"
@@ -91,5 +91,26 @@ def test_server_rejects_non_loopback_bind():
         create_server(
             "0.0.0.0",
             18766,
-            service_factory=lambda target_date: FakeService(),
+            service_factory=lambda project_id, target_date: FakeService(),
         )
+
+
+def test_hourly_endpoint_rejects_missing_project_id():
+    server = create_server(
+        "127.0.0.1",
+        0,
+        service_factory=lambda project_id, target_date: FakeService(),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            _get(f"{base}/v1/kst/hourly?date=2026-07-27")
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert payload == {"error": "project_id_required"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

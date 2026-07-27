@@ -6,18 +6,13 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from modules.kst_local.http_server import create_server
-from modules.kst_local.runtime import build_live_runtime
-from modules.project_config import (
-    build_runtime_config_from_project,
-    load_project_config,
-)
+from modules.kst_local.identity_registry import KstIdentityRegistry
 
 
 Probe = Callable[[str, str], bool | tuple[bool, str]]
@@ -51,6 +46,7 @@ def probe_kst_health(
     if (
         payload.get("status") == "ok"
         and payload.get("required_endpoints_available") is True
+        and payload.get("project_routing") is True
     ):
         return True, "127.0.0.1 本地 API 正常"
     return False, "商务通自动数据源尚未就绪"
@@ -64,23 +60,18 @@ class KstApiManager(QObject):
         self,
         root: str | Path,
         *,
-        project_id: str = "kunming_niu",
         probe: Probe = probe_kst_health,
         server_factory: Callable[..., Any] = create_server,
-        project_loader: Callable[..., dict[str, Any]] = load_project_config,
-        config_builder: Callable[..., dict[str, Any]] = build_runtime_config_from_project,
-        runtime_builder: Callable[..., Any] = build_live_runtime,
+        registry_factory: Callable[[Path], Any] = KstIdentityRegistry,
         retry_interval_ms: int = 15_000,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._root = Path(root)
-        self._project_id = project_id
         self._probe = probe
         self._server_factory = server_factory
-        self._project_loader = project_loader
-        self._config_builder = config_builder
-        self._runtime_builder = runtime_builder
+        self._registry_factory = registry_factory
+        self._registry: Any | None = None
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
         self._server: Any | None = None
@@ -112,6 +103,7 @@ class KstApiManager(QObject):
             server = self._server if self._owns_server else None
             worker = self._worker
             self._server = None
+            self._registry = None
             self._owns_server = False
             self._external_server = False
             self._ready = False
@@ -172,13 +164,7 @@ class KstApiManager(QObject):
 
     def _ensure_service(self) -> None:
         try:
-            project = self._project_loader(self._root, self._project_id)
-            config = self._config_builder(project, {})
-            kst_config = config.get("kst", {}) or {}
-            url = str(
-                kst_config.get("local_api_url")
-                or "http://127.0.0.1:18766"
-            ).rstrip("/")
+            url = "http://127.0.0.1:18766"
             parsed = urllib.parse.urlparse(url)
             if (
                 parsed.scheme != "http"
@@ -189,11 +175,7 @@ class KstApiManager(QObject):
                     "商务通本地 API 必须使用 127.0.0.1:18766"
                 )
             port = parsed.port or 18766
-            token_env = str(
-                kst_config.get("local_api_token_env")
-                or "KST_LOCAL_API_TOKEN"
-            )
-            token = os.environ.get(token_env, "")
+            token = os.environ.get("KST_LOCAL_API_TOKEN", "")
             healthy, detail = self._probe_result(self._probe(url, token))
             if healthy:
                 with self._lock:
@@ -211,13 +193,9 @@ class KstApiManager(QObject):
             if lost_external:
                 self._publish(False, "现有商务通本地 API 已断开，正在重启")
 
-            today = date.today().isoformat()
-            runtime = self._runtime_builder(
-                config,
-                today,
-                installation_root=kst_config.get("installation_root"),
-            )
-            health = runtime.health()
+            registry = self._registry_factory(self._root)
+            registry.refresh()
+            health = registry.health()
             if not (
                 health.get("status") == "ok"
                 and health.get("required_endpoints_available") is True
@@ -228,18 +206,17 @@ class KstApiManager(QObject):
                 )
                 return
 
-            def service_factory(request_date: str):
-                return self._runtime_builder(
-                    config,
+            def service_factory(project_id: str, request_date: str):
+                return registry.build_runtime(
+                    project_id,
                     request_date,
-                    installation_root=kst_config.get("installation_root"),
                 ).service
 
             server = self._server_factory(
                 "127.0.0.1",
                 port,
                 service_factory=service_factory,
-                health_provider=runtime.health,
+                health_provider=registry.health,
                 token=token,
             )
             with self._lock:
@@ -247,6 +224,7 @@ class KstApiManager(QObject):
                     server.server_close()
                     return
                 self._server = server
+                self._registry = registry
                 self._owns_server = True
                 self._external_server = False
             self._publish(True, f"商务通本地 API 已启动：127.0.0.1:{port}")

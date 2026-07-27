@@ -156,6 +156,7 @@ def test_health_diagnostics_expose_no_identity_or_promotion_ids(tmp_path):
     assert health == {
         "status": "ok",
         "required_endpoints_available": True,
+        "project_routing": True,
         "identity_count": 1,
         "bound_project_ids": ["a"],
         "unbound_project_ids": ["b"],

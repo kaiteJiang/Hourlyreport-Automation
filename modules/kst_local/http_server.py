@@ -8,7 +8,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 
-ServiceFactory = Callable[[str], Any]
+ServiceFactory = Callable[[str, str], Any]
 HealthProvider = Callable[[], dict[str, Any]]
 
 
@@ -65,8 +65,18 @@ def create_server(
 
             query = parse_qs(parsed.query)
             target_date = str(query.get("date", [date.today().isoformat()])[0])
+            if parsed.path in {
+                "/v1/kst/conversations",
+                "/v1/kst/hourly",
+            }:
+                project_id = str(query.get("project_id", [""])[0]).strip()
+                if not project_id:
+                    self._send(400, {"error": "project_id_required"})
+                    return
+            else:
+                project_id = ""
             try:
-                service = service_factory(target_date)
+                service = service_factory(project_id, target_date)
                 if parsed.path == "/v1/kst/conversations":
                     conversations = [
                         item.safe_dict() for item in service.collect(target_date)
@@ -74,6 +84,7 @@ def create_server(
                     self._send(
                         200,
                         {
+                            "project_id": project_id,
                             "date": target_date,
                             "source": "kst_local_api",
                             "conversations": conversations,
