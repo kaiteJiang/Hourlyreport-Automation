@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,6 +65,8 @@ class KstApiManager(QObject):
         server_factory: Callable[..., Any] = create_server,
         registry_factory: Callable[[Path], Any] = KstIdentityRegistry,
         retry_interval_ms: int = 15_000,
+        registry_refresh_interval_ms: int = 300_000,
+        monotonic: Callable[[], float] = time.monotonic,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -78,6 +81,12 @@ class KstApiManager(QObject):
         self._server: Any | None = None
         self._owns_server = False
         self._external_server = False
+        self._registry_refresh_interval_seconds = max(
+            0.0,
+            float(registry_refresh_interval_ms) / 1000.0,
+        )
+        self._monotonic = monotonic
+        self._last_registry_refresh_at: float | None = None
         self._ready = False
         self._detail = "商务通 API 未启动"
         self._started = False
@@ -106,6 +115,7 @@ class KstApiManager(QObject):
             server_thread = self._server_thread
             self._external_server = False
             self._ready = False
+            self._last_registry_refresh_at = None
             self._detail = "商务通 API 已停止"
         if server is not None:
             server.shutdown()
@@ -127,12 +137,14 @@ class KstApiManager(QObject):
                 self._server = None
                 self._server_thread = None
                 self._registry = None
+                self._last_registry_refresh_at = None
                 self._owns_server = False
                 close_fallback = True
             elif server is None:
                 self._server = None
                 self._server_thread = None
                 self._registry = None
+                self._last_registry_refresh_at = None
                 self._owns_server = False
         if close_fallback:
             server.server_close()
@@ -190,6 +202,25 @@ class KstApiManager(QObject):
             if self._stopping or not self._owns_server:
                 return
             registry = self._registry
+            last_refresh = self._last_registry_refresh_at
+        now = self._monotonic()
+        if registry is not None and last_refresh is not None:
+            age = now - last_refresh
+            if 0 <= age < self._registry_refresh_interval_seconds:
+                try:
+                    health = registry.health()
+                    ready = (
+                        health.get("status") == "ok"
+                        and health.get("required_endpoints_available") is True
+                    )
+                except Exception:
+                    ready = False
+                if ready:
+                    self._publish(
+                        True,
+                        "商务通本地 API 正常：127.0.0.1:18766",
+                    )
+                    return
         try:
             if registry is None:
                 registry = self._registry_factory(self._root)
@@ -206,6 +237,7 @@ class KstApiManager(QObject):
             if self._stopping or not self._owns_server:
                 return
             self._registry = registry if ready else None
+            self._last_registry_refresh_at = now if ready else None
         if ready:
             self._publish(True, "商务通本地 API 正常：127.0.0.1:18766")
         else:
@@ -244,6 +276,7 @@ class KstApiManager(QObject):
                     self._server = None
                     self._server_thread = None
                     self._registry = None
+                    self._last_registry_refresh_at = None
                     self._owns_server = False
                     self._external_server = False
                     server.server_close()
@@ -313,6 +346,7 @@ class KstApiManager(QObject):
                     return
                 self._server = server
                 self._registry = registry
+                self._last_registry_refresh_at = self._monotonic()
                 self._owns_server = True
                 self._external_server = False
                 self._server_thread = threading.Thread(

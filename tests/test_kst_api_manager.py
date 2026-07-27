@@ -172,9 +172,10 @@ def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
     manager.stop()
 
 
-def test_owned_server_periodically_reuses_identity_registry(qapp, tmp_path):
+def test_healthy_owned_server_skips_full_refresh_before_interval(qapp, tmp_path):
     server = FakeServer()
     registries = []
+    now = [100.0]
 
     def registry_factory(*_args):
         registry = FakeRegistry()
@@ -187,15 +188,21 @@ def test_owned_server_periodically_reuses_identity_registry(qapp, tmp_path):
         probe=lambda *_: False,
         server_factory=lambda *_args, **_kwargs: server,
         retry_interval_ms=20,
+        registry_refresh_interval_ms=300_000,
+        monotonic=lambda: now[0],
     )
 
     manager.start()
 
     assert wait_until(manager.is_ready)
-    assert wait_until(
-        lambda: len(registries) == 1
-        and registries[0].refresh_calls >= 2
-    )
+    deadline = time.monotonic() + 0.08
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert len(registries) == 1
+    assert registries[0].refresh_calls == 1
+    now[0] += 301
+    assert wait_until(lambda: registries[0].refresh_calls == 2)
     manager.stop()
 
 
