@@ -1,0 +1,119 @@
+import threading
+import time
+
+import pytest
+from PySide6.QtWidgets import QApplication
+
+from gui.kst_api_manager import KstApiManager
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+def wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+class FakeRuntime:
+    service = object()
+
+    def health(self):
+        return {
+            "status": "ok",
+            "required_endpoints_available": True,
+        }
+
+
+class FakeServer:
+    def __init__(self):
+        self.shutdown_calls = 0
+        self.close_calls = 0
+        self._stopped = threading.Event()
+
+    def serve_forever(self):
+        self._stopped.wait(2)
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+        self._stopped.set()
+
+    def server_close(self):
+        self.close_calls += 1
+
+
+def _manager(tmp_path, **kwargs):
+    return KstApiManager(
+        tmp_path,
+        project_loader=lambda *_: {
+            "project_id": "kunming_niu",
+            "kst": {
+                "local_api_url": "http://127.0.0.1:18766",
+                "local_api_token_env": "TEST_KST_TOKEN",
+            },
+        },
+        config_builder=lambda project, base: project,
+        runtime_builder=lambda *_args, **_kwargs: FakeRuntime(),
+        **kwargs,
+    )
+
+
+def test_manager_starts_owned_server_and_stops_it(qapp, tmp_path):
+    server = FakeServer()
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+
+    assert wait_until(manager.is_ready)
+    assert manager.owns_server() is True
+    manager.stop()
+    assert server.shutdown_calls == 1
+    assert server.close_calls == 1
+
+
+def test_manager_reuses_external_server_without_stopping_it(qapp, tmp_path):
+    factory_calls = []
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: True,
+        server_factory=lambda *_args, **_kwargs: factory_calls.append(1),
+    )
+
+    manager.start()
+
+    assert wait_until(manager.is_ready)
+    manager.stop()
+    assert manager.owns_server() is False
+    assert factory_calls == []
+
+
+def test_failed_start_stays_gray_and_retries(qapp, tmp_path):
+    attempts = []
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: (
+            attempts.append(1)
+            or (_ for _ in ()).throw(OSError("busy"))
+        ),
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+
+    assert wait_until(lambda: len(attempts) >= 2)
+    assert manager.is_ready() is False
+    manager.stop()
