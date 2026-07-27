@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from modules.kst_local.db_reader import KstDatabaseError, read_cache_candidates
+from modules.kst_local.db_reader import (
+    KstDatabaseError,
+    read_cache_candidates,
+    read_identity_promotion_ids,
+)
 from modules.kst_local.models import KstInstallation
 
 
@@ -120,3 +124,44 @@ def test_javascript_bridge_is_readonly_and_contains_no_mutation_sql():
     assert "INSERT " not in normalized
     assert "UPDATE " not in normalized
     assert "DELETE " not in normalized
+
+
+def test_read_identity_promotion_ids_merges_all_rotated_databases(tmp_path):
+    installation = _installation(tmp_path)
+    outputs = iter(
+        [
+            {"promotionIds": ["72828178", "72828179"]},
+            {"promotionIds": ["72828179", "81509165"]},
+        ]
+    )
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(next(outputs)),
+            stderr="",
+        )
+
+    result = read_identity_promotion_ids(installation, runner=runner)
+
+    assert result == {"72828178", "72828179", "81509165"}
+
+
+def test_promotion_id_bridge_is_readonly_and_returns_no_visitor_fields():
+    bridge = (
+        Path(__file__).parents[1]
+        / "modules"
+        / "kst_local"
+        / "resources"
+        / "read_promotion_ids.js"
+    )
+    source = bridge.read_text(encoding="utf-8")
+    normalized = source.upper()
+
+    assert "READONLY: TRUE" in normalized
+    assert "FILEMUSTEXIST: TRUE" in normalized
+    assert "INSERT " not in normalized
+    assert "UPDATE " not in normalized
+    assert "DELETE " not in normalized
+    assert "SAFEROWS" not in normalized

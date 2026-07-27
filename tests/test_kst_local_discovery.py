@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from modules.kst_local.discovery import KstDiscoveryError, discover_installation
+from modules.kst_local.discovery import (
+    KstDiscoveryError,
+    discover_installation,
+    discover_installations,
+)
 
 
 def _build_installation(tmp_path: Path) -> tuple[Path, Path]:
@@ -58,3 +62,27 @@ def test_invalid_explicit_root_fails_instead_of_falling_back(tmp_path):
             explicit_root=tmp_path / "missing",
             local_app_data=tmp_path / "Local",
         )
+
+
+def test_discover_installations_returns_every_identity(tmp_path):
+    root, local_app_data = _build_installation(tmp_path)
+    data_root = local_app_data / "OnlineWebCSNew"
+    for identity in ("100_aaa", "200_bbb", "300_ccc"):
+        log_dir = data_root / "log" / identity
+        db_dir = data_root / "db" / identity
+        log_dir.mkdir(parents=True)
+        db_dir.mkdir(parents=True)
+        (log_dir / "app.log").write_text("ready", encoding="utf-8")
+        (db_dir / "VISITOR.db").write_bytes(b"db")
+
+    found = discover_installations(
+        explicit_root=root,
+        local_app_data=local_app_data,
+    )
+
+    assert [item.identity for item in found] == [
+        "100_aaa",
+        "200_bbb",
+        "300_ccc",
+        "733875_1269870",
+    ]

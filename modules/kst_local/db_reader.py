@@ -125,3 +125,59 @@ def read_cache_candidates(
             )
 
     return sorted(merged.values(), key=lambda row: (row.start_time, row.rec_id))
+
+
+def read_identity_promotion_ids(
+    installation: KstInstallation,
+    *,
+    runner: Runner = subprocess.run,
+    bridge_script: str | Path | None = None,
+) -> set[str]:
+    script = (
+        Path(bridge_script)
+        if bridge_script is not None
+        else Path(__file__).parent / "resources" / "read_promotion_ids.js"
+    ).resolve()
+    env = dict(os.environ)
+    env["ELECTRON_RUN_AS_NODE"] = "1"
+    promotion_ids: set[str] = set()
+
+    for database_path in installation.database_paths:
+        command = [
+            str(installation.electron),
+            str(script),
+            installation.identity,
+            str(database_path),
+            str(installation.sqlite_module_dir),
+        ]
+        try:
+            completed = runner(
+                command,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise KstDatabaseError(
+                f"商务通推广 ID 只读桥执行失败：{database_path.name}"
+            ) from exc
+        try:
+            payload = json.loads(completed.stdout)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise KstDatabaseError(
+                f"商务通推广 ID 只读桥未返回有效 JSON：{database_path.name}"
+            ) from exc
+        values = payload.get("promotionIds") if isinstance(payload, dict) else None
+        if not isinstance(values, list):
+            raise KstDatabaseError(
+                f"商务通推广 ID 只读桥响应缺少 promotionIds：{database_path.name}"
+            )
+        for value in values:
+            normalized = str(value or "").strip()
+            if normalized.isdigit() and len(normalized) >= 5:
+                promotion_ids.add(normalized)
+
+    return promotion_ids

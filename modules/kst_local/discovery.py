@@ -59,10 +59,9 @@ def _latest_log_mtime(log_dir: Path) -> float:
     return max((path.stat().st_mtime for path in files), default=log_dir.stat().st_mtime)
 
 
-def _discover_identity(
+def _identity_candidates(
     local_app_data: Path,
-    explicit_identity: str | None = None,
-) -> tuple[str, Path, tuple[Path, ...]]:
+) -> list[tuple[float, str, Path, tuple[Path, ...]]]:
     data_root = local_app_data / "OnlineWebCSNew"
     log_root = data_root / "log"
     db_root = data_root / "db"
@@ -92,6 +91,15 @@ def _discover_identity(
                         database_paths,
                     )
                 )
+    return candidates
+
+
+def _discover_identity(
+    local_app_data: Path,
+    explicit_identity: str | None = None,
+) -> tuple[str, Path, tuple[Path, ...]]:
+    data_root = local_app_data / "OnlineWebCSNew"
+    candidates = _identity_candidates(local_app_data)
     if not candidates:
         raise KstDiscoveryError(
             f"未找到同时具有日志和 VISITOR.db 的商务通身份目录：{data_root}"
@@ -111,11 +119,9 @@ def _discover_identity(
     return identity, log_dir, database_paths
 
 
-def discover_installation(
+def _resolve_installation_root(
     explicit_root: str | Path | None = None,
-    local_app_data: str | Path | None = None,
-    explicit_identity: str | None = None,
-) -> KstInstallation:
+) -> tuple[Path, Path, Path, str]:
     if explicit_root is not None:
         try:
             root, electron, sqlite_module, version = _validate_root(Path(explicit_root))
@@ -135,6 +141,52 @@ def discover_installation(
                 "未自动发现商务通安装目录；已检查：" + "；".join(attempts)
             )
         root, electron, sqlite_module, version = resolved_values
+    return root, electron, sqlite_module, version
+
+
+def discover_installations(
+    explicit_root: str | Path | None = None,
+    local_app_data: str | Path | None = None,
+) -> list[KstInstallation]:
+    root, electron, sqlite_module, version = _resolve_installation_root(
+        explicit_root
+    )
+    local_root = Path(
+        local_app_data
+        if local_app_data is not None
+        else os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+    ).expanduser().resolve()
+    candidates = _identity_candidates(local_root)
+    if not candidates:
+        data_root = local_root / "OnlineWebCSNew"
+        raise KstDiscoveryError(
+            f"未找到同时具有日志和 VISITOR.db 的商务通身份目录：{data_root}"
+        )
+    return [
+        KstInstallation(
+            root=root,
+            electron=electron,
+            version=version,
+            identity=identity,
+            log_dir=log_dir,
+            database_paths=database_paths,
+            sqlite_module_dir=sqlite_module,
+        )
+        for _, identity, log_dir, database_paths in sorted(
+            candidates,
+            key=lambda item: item[1],
+        )
+    ]
+
+
+def discover_installation(
+    explicit_root: str | Path | None = None,
+    local_app_data: str | Path | None = None,
+    explicit_identity: str | None = None,
+) -> KstInstallation:
+    root, electron, sqlite_module, version = _resolve_installation_root(
+        explicit_root
+    )
 
     local_root = Path(
         local_app_data

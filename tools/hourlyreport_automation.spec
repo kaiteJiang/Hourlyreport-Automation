@@ -49,6 +49,16 @@ a = Analysis(
             ),
             "modules/kst_local/resources",
         ),
+        (
+            str(
+                ROOT
+                / "modules"
+                / "kst_local"
+                / "resources"
+                / "read_promotion_ids.js"
+            ),
+            "modules/kst_local/resources",
+        ),
     ],
     hiddenimports=["gui.update_dialog"],
     hookspath=[],

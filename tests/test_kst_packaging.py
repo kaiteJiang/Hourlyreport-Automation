@@ -8,4 +8,5 @@ def test_desktop_spec_packages_kst_database_bridge():
     ).read_text(encoding="utf-8")
 
     assert "read_visitor_db.js" in spec_source
+    assert "read_promotion_ids.js" in spec_source
     assert "modules/kst_local/resources" in spec_source.replace("\\", "/")
