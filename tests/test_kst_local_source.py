@@ -4,7 +4,11 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from modules.kst_local.source import KstLocalSourceError, fetch_kst_local_report
+from modules.kst_local.source import (
+    KstLocalSourceError,
+    fetch_kst_local_daily_report,
+    fetch_kst_local_report,
+)
 
 
 def _config(url="http://127.0.0.1:18766"):
@@ -172,5 +176,84 @@ def test_response_for_another_project_is_rejected_and_zeroed(tmp_path):
     assert all(
         value == 0
         for account in result["dialog_data"]["accounts"].values()
+        for value in account.values()
+    )
+
+
+def _daily_accounts(total=0):
+    return {
+        account: {
+            "总对话": total if account == "银康01" else 0,
+            "有效对话": total if account == "银康01" else 0,
+            "无效对话": 0,
+            "一般有效对话": 0,
+            "有效转潜": 0,
+            "总转潜": 0,
+        }
+        for account in ("银康01", "银康银屑02", "银康03")
+    }
+
+
+def test_daily_source_fetches_project_report_and_writes_daily_contract(
+    tmp_path,
+):
+    calls = []
+
+    def transport(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        return {
+            "project_id": "kunming_niu",
+            "project_name": "昆明牛",
+            "date": "2026-07-26",
+            "source": "kst_local_api",
+            "accounts": _daily_accounts(total=1),
+            "summary": {"automatic_rows": 1},
+            "errors": [],
+        }
+
+    result = fetch_kst_local_daily_report(
+        _config(),
+        tmp_path,
+        target_date="2026-07-26",
+        transport=transport,
+    )
+
+    assert urlparse(calls[0][0]).path == "/v1/kst/daily"
+    assert parse_qs(urlparse(calls[0][0]).query) == {
+        "project_id": ["kunming_niu"],
+        "date": ["2026-07-26"],
+    }
+    assert result["parse_report"]["passed"] is True
+    assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 1
+    output = tmp_path / "reports" / "kst_daily_data.json"
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["source"] == "kst_local_api"
+    assert saved["project_id"] == "kunming_niu"
+
+
+def test_daily_response_for_another_project_is_zeroed_when_opted_in(
+    tmp_path,
+):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+
+    result = fetch_kst_local_daily_report(
+        config,
+        tmp_path,
+        target_date="2026-07-26",
+        transport=lambda *_: {
+            "project_id": "another_project",
+            "date": "2026-07-26",
+            "source": "kst_local_api",
+            "accounts": _daily_accounts(total=99),
+            "errors": [],
+        },
+    )
+
+    assert result["daily_data"]["source"] == "kst_local_api_unavailable_zero"
+    assert result["daily_data"]["summary"]["api_unavailable"] is True
+    assert all(
+        value == 0
+        for account in result["daily_data"]["accounts"].values()
         for value in account.values()
     )
