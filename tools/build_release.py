@@ -113,7 +113,7 @@ def should_include_file(
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
     if parts and parts[0] == "dist":
-        return (internal or online_update or first_install) and len(parts) == 2 and parts[1] == DESKTOP_EXE
+        return False
     if parts and parts[0] == "tests":
         return False
     if len(parts) >= 2 and parts[0] == "docs" and parts[1] == "superpowers":
@@ -146,9 +146,13 @@ def should_include_file(
     return True
 
 
-def _validate_first_install_source(root: Path) -> None:
+def _validate_first_install_source(
+    root: Path,
+    artifact_dir: str | Path | None,
+) -> None:
+    artifact_path = _desktop_artifact_dir(root, artifact_dir)
     required_files = (
-        root / "dist" / DESKTOP_EXE,
+        artifact_path / DESKTOP_EXE,
         root / "main.py",
         root / "configs" / "app_config.json",
         root / "install_env.bat",
@@ -212,9 +216,27 @@ def _source_version(root: Path) -> str:
     return validate_online_version(match.group(1))
 
 
-def _validate_desktop_build(root: Path, expected_version: str) -> None:
-    executable = root / "dist" / DESKTOP_EXE
-    manifest_path = root / "dist" / DESKTOP_BUILD_MANIFEST
+def _desktop_artifact_dir(
+    root: Path,
+    artifact_dir: str | Path | None,
+) -> Path:
+    if artifact_dir is not None:
+        return Path(artifact_dir)
+    try:
+        version = _source_version(root)
+    except (OSError, ValueError):
+        version = "unversioned"
+    return root / "build" / f"release_{version}_staging"
+
+
+def _validate_desktop_build(
+    root: Path,
+    expected_version: str,
+    artifact_dir: str | Path | None,
+) -> None:
+    artifact_path = _desktop_artifact_dir(root, artifact_dir)
+    executable = artifact_path / DESKTOP_EXE
+    manifest_path = artifact_path / DESKTOP_BUILD_MANIFEST
     if not manifest_path.is_file():
         raise ValueError(f"缺少桌面程序构建清单：{manifest_path.relative_to(root)}")
     try:
@@ -233,12 +255,17 @@ def _validate_desktop_build(root: Path, expected_version: str) -> None:
         raise ValueError("桌面程序构建清单与当前源码不一致，请重新构建 EXE")
 
 
-def _validate_online_update_source(root: Path, version: str) -> None:
+def _validate_online_update_source(
+    root: Path,
+    version: str,
+    artifact_dir: str | Path | None,
+) -> None:
+    artifact_path = _desktop_artifact_dir(root, artifact_dir)
     required_files = (
-        root / "dist" / DESKTOP_EXE,
+        artifact_path / DESKTOP_EXE,
         root / "main.py",
         root / "gui" / "version.py",
-        root / "dist" / DESKTOP_BUILD_MANIFEST,
+        artifact_path / DESKTOP_BUILD_MANIFEST,
     )
     missing = [str(path.relative_to(root)) for path in required_files if not path.is_file()]
     if missing:
@@ -247,7 +274,7 @@ def _validate_online_update_source(root: Path, version: str) -> None:
     source_version = _source_version(root)
     if source_version != clean_version:
         raise ValueError(f"源码版本 {source_version} 与发布版本 {clean_version} 不一致")
-    _validate_desktop_build(root, clean_version)
+    _validate_desktop_build(root, clean_version, artifact_path)
 
 
 def build_release(
@@ -257,21 +284,38 @@ def build_release(
     online_update: bool = False,
     first_install: bool = False,
     output_dir: str | Path | None = None,
+    artifact_dir: str | Path | None = None,
 ) -> Path:
     if sum((bool(internal), bool(online_update), bool(first_install))) > 1:
         raise ValueError("内部包、首次安装包与在线更新包不能同时生成")
     root_path = Path(root)
-    dist_dir = Path(output_dir) if output_dir is not None else root_path / "dist"
+    dist_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else root_path / "build" / "releases"
+    )
     dist_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = _desktop_artifact_dir(
+        root_path,
+        artifact_dir,
+    )
     if first_install:
-        _validate_first_install_source(root_path)
+        _validate_first_install_source(root_path, artifact_path)
         clean_version = validate_online_version(version or "")
         source_version = _source_version(root_path)
         if source_version != clean_version:
             raise ValueError(f"源码版本 {source_version} 与发布版本 {clean_version} 不一致")
-        _validate_desktop_build(root_path, clean_version)
+        _validate_desktop_build(
+            root_path,
+            clean_version,
+            artifact_path,
+        )
     if online_update:
-        _validate_online_update_source(root_path, version or "")
+        _validate_online_update_source(
+            root_path,
+            version or "",
+            artifact_path,
+        )
     release_path = dist_dir / release_name(
         version,
         internal=internal,
@@ -282,6 +326,12 @@ def build_release(
         release_path.unlink()
 
     with zipfile.ZipFile(release_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        executable = artifact_path / DESKTOP_EXE
+        if (
+            (internal or online_update or first_install)
+            and executable.is_file()
+        ):
+            archive.write(executable, DESKTOP_EXE)
         for path in root_path.rglob("*"):
             if path.is_dir():
                 continue
@@ -292,7 +342,7 @@ def build_release(
                 online_update=online_update,
                 first_install=first_install,
             ):
-                archive_name = DESKTOP_EXE if rel.parts == ("dist", DESKTOP_EXE) else rel.as_posix()
+                archive_name = rel.as_posix()
                 if rel.as_posix() == "configs/app_config.json":
                     app_config = json.loads(path.read_text(encoding="utf-8"))
                     app_config.pop("desktop_pet_position", None)
@@ -320,6 +370,7 @@ def main() -> None:
         internal=args.internal,
         online_update=args.online_update,
         first_install=args.first_install,
+        output_dir=root / "dist",
     )
     size_mb = release_path.stat().st_size / 1024 / 1024
     if args.online_update:

@@ -41,6 +41,8 @@ def build_windows_installer(
     version: str,
     *,
     compiler: str | Path | None = None,
+    artifact_dir: str | Path | None = None,
+    output_dir: str | Path | None = None,
 ) -> Path:
     root_path = Path(root).resolve()
     clean_version = validate_online_version(version)
@@ -51,9 +53,13 @@ def build_windows_installer(
     script = root_path / "tools" / INSTALLER_SCRIPT
     if not script.is_file():
         raise FileNotFoundError(f"缺少安装器定义：{script}")
-    output_dir = root_path / "dist"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    expected_output = output_dir / installer_name(clean_version)
+    installer_output_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else root_path / "dist"
+    )
+    installer_output_dir.mkdir(parents=True, exist_ok=True)
+    expected_output = installer_output_dir / installer_name(clean_version)
     expected_output.unlink(missing_ok=True)
 
     build_dir = root_path / "build"
@@ -65,6 +71,7 @@ def build_windows_installer(
             version=clean_version,
             first_install=True,
             output_dir=temp_root,
+            artifact_dir=artifact_dir,
         )
         payload = temp_root / "payload"
         payload.mkdir()
@@ -75,7 +82,7 @@ def build_windows_installer(
             str(compiler_path),
             f"/DAppVersion={clean_version}",
             f"/DPayloadDir={payload}",
-            f"/DInstallerOutput={output_dir}",
+            f"/DInstallerOutput={installer_output_dir}",
             str(script),
         ]
         result = subprocess.run(command, cwd=root_path)

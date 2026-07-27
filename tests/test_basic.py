@@ -9307,14 +9307,30 @@ def test_regular_build_excludes_secrets_json():
 
 
 def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
+    from tools.build_desktop_exe import write_build_manifest
     from tools.build_release import release_name
 
-    root = Path(__file__).resolve().parents[1]
+    root = tmp_path / "source"
+    (root / "gui").mkdir(parents=True)
+    (root / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.27.113"\n',
+        encoding="utf-8",
+    )
+    (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    artifact_dir = (
+        root / "build" / "release_2026.7.27.113_staging"
+    )
+    artifact_dir.mkdir(parents=True)
+    executable = artifact_dir / "hourlyreport_automation.exe"
+    executable.write_bytes(b"exe-113")
+    write_build_manifest(root, executable, "2026.7.27.113")
+
     release = build_release(
         root,
         version="2026.7.27.113",
         online_update=True,
-        output_dir=tmp_path,
+        artifact_dir=artifact_dir,
+        output_dir=tmp_path / "output",
     )
 
     import zipfile
@@ -9322,7 +9338,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
         names = set(archive.namelist())
 
     assert release.name == "Hourlyreport_automation_v2026.7.27.113.zip"
-    assert release.parent == tmp_path
+    assert release.parent == tmp_path / "output"
     assert release_name("2026.7.27.113", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
@@ -9342,8 +9358,11 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     from tools.build_desktop_exe import write_build_manifest
     from tools.build_release import build_release, release_name
 
-    (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "hourlyreport_automation.exe").write_bytes(b"exe")
+    artifact_dir = (
+        tmp_path / "build" / "release_2026.7.17.103_staging"
+    )
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "hourlyreport_automation.exe").write_bytes(b"exe")
     (tmp_path / "configs" / "projects").mkdir(parents=True)
     (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
         "default_project_id": "demo",
@@ -9367,9 +9386,18 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     )
     (tmp_path / "install_env.bat").write_text("@echo off\r\n", encoding="ascii")
     (tmp_path / "requirements-runtime.txt").write_text("openpyxl\n", encoding="utf-8")
-    write_build_manifest(tmp_path, tmp_path / "dist" / "hourlyreport_automation.exe", "2026.7.17.103")
+    write_build_manifest(
+        tmp_path,
+        artifact_dir / "hourlyreport_automation.exe",
+        "2026.7.17.103",
+    )
 
-    release = build_release(tmp_path, version="2026.7.17.103", first_install=True)
+    release = build_release(
+        tmp_path,
+        version="2026.7.17.103",
+        first_install=True,
+        artifact_dir=artifact_dir,
+    )
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
@@ -9443,7 +9471,7 @@ def test_online_release_version_rejects_invalid_date_or_counter():
 def test_online_update_file_filter_never_includes_user_configuration():
     assert should_include_file(Path("main.py"), online_update=True) is True
     assert should_include_file(Path("gui") / "main_window.py", online_update=True) is True
-    assert should_include_file(Path("dist") / "hourlyreport_automation.exe", online_update=True) is True
+    assert should_include_file(Path("dist") / "hourlyreport_automation.exe", online_update=True) is False
     assert should_include_file(Path("configs") / "app_config.json", online_update=True) is False
     assert should_include_file(Path("configs") / "projects" / "kunming_niu.json", online_update=True) is False
     assert should_include_file(Path("secrets") / "secrets.json", online_update=True) is False
@@ -9501,14 +9529,19 @@ def test_built_archive_excludes_authorization_package_and_real_secrets(tmp_path)
     assert "team.baidu-secrets" not in names
 
 
-def test_internal_build_includes_desktop_exe_when_available():
-    root = Path(__file__).resolve().parents[1]
-    exe = root / "dist" / "hourlyreport_automation.exe"
-    exe.parent.mkdir(parents=True, exist_ok=True)
-    if not exe.exists():
-        exe.write_bytes(b"placeholder exe")
+def test_internal_build_includes_desktop_exe_when_available(tmp_path):
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    exe = artifact_dir / "hourlyreport_automation.exe"
+    exe.write_bytes(b"placeholder exe")
+    (tmp_path / "main.py").write_text("print('ok')\n", encoding="utf-8")
 
-    release = build_release(root, version="2.0", internal=True)
+    release = build_release(
+        tmp_path,
+        version="2.0",
+        internal=True,
+        artifact_dir=artifact_dir,
+    )
 
     import zipfile
     with zipfile.ZipFile(release) as archive:
@@ -12195,8 +12228,11 @@ def test_online_release_refuses_source_or_exe_version_mismatch(tmp_path):
     from tools.build_desktop_exe import write_build_manifest
     from tools.build_release import build_release
 
-    (tmp_path / "dist").mkdir()
-    executable = tmp_path / "dist" / "hourlyreport_automation.exe"
+    artifact_dir = (
+        tmp_path / "build" / "release_2026.7.19.104_staging"
+    )
+    artifact_dir.mkdir(parents=True)
+    executable = artifact_dir / "hourlyreport_automation.exe"
     executable.write_bytes(b"exe-104")
     (tmp_path / "gui").mkdir()
     (tmp_path / "gui" / "version.py").write_text(
@@ -12206,14 +12242,26 @@ def test_online_release_refuses_source_or_exe_version_mismatch(tmp_path):
     write_build_manifest(tmp_path, executable, "2026.7.19.104")
 
     with pytest.raises(ValueError, match="源码版本"):
-        build_release(tmp_path, version="2026.7.19.105", online_update=True)
+        build_release(
+            tmp_path,
+            version="2026.7.19.105",
+            online_update=True,
+            artifact_dir=artifact_dir,
+        )
 
-    manifest_path = tmp_path / "dist" / "hourlyreport_automation.build.json"
+    manifest_path = (
+        artifact_dir / "hourlyreport_automation.build.json"
+    )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["sha256"] = "0" * 64
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="构建清单|SHA-256"):
-        build_release(tmp_path, version="2026.7.19.104", online_update=True)
+        build_release(
+            tmp_path,
+            version="2026.7.19.104",
+            online_update=True,
+            artifact_dir=artifact_dir,
+        )
 
 
 def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):

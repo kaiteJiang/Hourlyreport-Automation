@@ -12,6 +12,17 @@ APP_NAME = "hourlyreport_automation"
 BUILD_MANIFEST_NAME = f"{APP_NAME}.build.json"
 
 
+def desktop_staging_dir(
+    root: str | Path,
+    version: str | None = None,
+) -> Path:
+    root_path = Path(root)
+    build_version = str(
+        version or read_source_version(root_path)
+    ).strip()
+    return root_path / "build" / f"release_{build_version}_staging"
+
+
 def read_source_version(root: str | Path) -> str:
     version_file = Path(root) / "gui" / "version.py"
     text = version_file.read_text(encoding="utf-8")
@@ -75,8 +86,18 @@ def write_build_manifest(root: str | Path, executable: str | Path, version: str 
     return manifest_path
 
 
-def build_desktop_exe(root: str | Path) -> int:
+def build_desktop_exe(
+    root: str | Path,
+    *,
+    output_dir: str | Path | None = None,
+) -> int:
     root_path = Path(root)
+    build_version = read_source_version(root_path)
+    target_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else desktop_staging_dir(root_path, build_version)
+    )
     python = root_path / ".venv" / "Scripts" / "python.exe"
     if not python.exists():
         print("[失败] 缺少 .venv\\Scripts\\python.exe，请先运行 install_env.bat")
@@ -89,7 +110,7 @@ def build_desktop_exe(root: str | Path) -> int:
         "--noconfirm",
         "--clean",
         "--distpath",
-        str(root_path / "dist"),
+        str(target_dir),
         "--workpath",
         str(root_path / "build" / APP_NAME),
         str(spec),
@@ -97,11 +118,15 @@ def build_desktop_exe(root: str | Path) -> int:
     result = subprocess.run(command, cwd=root_path)
     if result.returncode != 0:
         return int(result.returncode)
-    output = root_path / "dist" / f"{APP_NAME}.exe"
+    output = target_dir / f"{APP_NAME}.exe"
     if not output.exists() or output.stat().st_size == 0:
         print(f"[失败] PyInstaller 未生成预期文件：{output}")
         return 1
-    manifest = write_build_manifest(root_path, output)
+    manifest = write_build_manifest(
+        root_path,
+        output,
+        build_version,
+    )
     print(f"[完成] 单文件 GUI：{output}")
     print(f"[完成] 构建清单：{manifest}")
     return 0
