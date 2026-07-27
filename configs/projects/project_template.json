@@ -11,7 +11,10 @@
   "kst": {
     "export_dir": "D:/你的项目/商务通导出",
     "auto_pick_latest": true,
-    "max_file_age_minutes": 30
+    "max_file_age_minutes": 30,
+    "data_source": "export",
+    "local_api_url": "http://127.0.0.1:18766",
+    "local_api_token_env": "KST_LOCAL_API_TOKEN"
   },
   "baidu": {
     "credential_profile": "your_baidu_profile",

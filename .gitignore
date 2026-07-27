@@ -30,6 +30,7 @@ reports/baidu_page_text_dump.txt
 reports/baidu_visible_text.txt
 dist/
 build/
+runtime/
 .playwright-cli/
 *.spec
 _verify_excel.py

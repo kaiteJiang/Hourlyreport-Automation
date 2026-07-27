@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from datetime import date
 from pathlib import Path
 
 from modules.config_manager import load_config
@@ -42,6 +44,8 @@ from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
 from modules.multi_project_runner import run_multi_project_pipeline
 from modules.multi_project_stop import resolve_multi_queue_stop_gate
 from modules.task_stop_gate import pipeline_exit_code
+from modules.kst_local.http_server import create_server
+from modules.kst_local.runtime import build_live_runtime, write_hourly_report
 
 ROOT = Path(__file__).resolve().parent
 
@@ -51,8 +55,7 @@ def ensure_runtime_dirs() -> None:
         (ROOT / name).mkdir(exist_ok=True)
 
 
-def main() -> int | None:
-    ensure_runtime_dirs()
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="百度竞价日报/小时报自动化工具")
     parser.add_argument("--mode", required=True, choices=[
         "inspect-excel",
@@ -76,6 +79,8 @@ def main() -> int | None:
         "validate-baidu",
         "parse-kst-export",
         "parse-kst-daily",
+        "fetch-kst-local",
+        "serve-kst-local",
         "merge-data",
         "merge-daily",
         "write-excel",
@@ -108,6 +113,15 @@ def main() -> int | None:
     parser.add_argument("--older-than-days", type=int, default=14, help="archive-logs 归档多少天以前的 .log 文件")
     parser.add_argument("--sync-cloud-token-store", action="store_true", help="导入百度 OAuth 后同步到云端集中 token 存储")
     parser.add_argument("--profiles", default=None, help="逗号分隔的百度 API profile；仅 sync-baidu-cloud-token-store 使用")
+    parser.add_argument("--kst-root", default=None, help="商务通安装根目录；不传则自动发现")
+    parser.add_argument("--host", default="127.0.0.1", help="本地 API 地址，只允许 127.0.0.1")
+    parser.add_argument("--port", type=int, default=18766, help="本地 API 端口，默认 18766")
+    return parser
+
+
+def main() -> int | None:
+    ensure_runtime_dirs()
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.verbose:
@@ -150,6 +164,59 @@ def main() -> int | None:
         config_error = exc
         current_project = {}
         config = base_config
+
+    if args.mode in {"fetch-kst-local", "serve-kst-local"}:
+        target_date = args.date or date.today().isoformat()
+        try:
+            runtime = build_live_runtime(
+                config,
+                target_date,
+                installation_root=args.kst_root,
+            )
+            if args.mode == "fetch-kst-local":
+                report = runtime.service.build_hourly_report(
+                    target_date,
+                    args.period,
+                )
+                output = write_hourly_report(
+                    report,
+                    ROOT / "reports" / "kst_dialog_data.json",
+                )
+                print_success(f"商务通本地 API 数据读取完成：{output}")
+                return 0
+
+            kst_config = config.get("kst", {}) or {}
+            token_env = str(
+                kst_config.get("local_api_token_env")
+                or "KST_LOCAL_API_TOKEN"
+            )
+            token = os.environ.get(token_env, "")
+
+            def service_factory(request_date: str):
+                return build_live_runtime(
+                    config,
+                    request_date,
+                    installation_root=args.kst_root,
+                ).service
+
+            server = create_server(
+                args.host,
+                args.port,
+                service_factory=service_factory,
+                health_provider=runtime.health,
+                token=token,
+            )
+            print_success(
+                f"商务通本地 API 已启动：http://{args.host}:{server.server_address[1]}"
+            )
+            server.serve_forever()
+            return 0
+        except KeyboardInterrupt:
+            print_quiet_line("商务通本地 API 已停止。")
+            return 0
+        except Exception as exc:
+            print_error(f"商务通本地 API 启动或读取失败：{exc}")
+            return 1
 
     if args.mode == "list-projects":
         projects = list_projects(ROOT)
