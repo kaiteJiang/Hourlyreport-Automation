@@ -38,7 +38,18 @@ a = Analysis(
     [str(ROOT / "gui" / "app.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[],
+    datas=[
+        (
+            str(
+                ROOT
+                / "modules"
+                / "kst_local"
+                / "resources"
+                / "read_visitor_db.js"
+            ),
+            "modules/kst_local/resources",
+        ),
+    ],
     hiddenimports=["gui.update_dialog"],
     hookspath=[],
     hooksconfig={},
