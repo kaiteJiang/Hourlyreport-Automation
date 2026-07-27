@@ -89,6 +89,9 @@ def load_app_config(root: str | Path) -> dict[str, Any]:
                 RuntimeWarning,
             )
             config["baidu_data_source_preference"] = "api"
+    config["kst_data_source"] = normalize_kst_data_source(
+        config.get("kst_data_source")
+    )
     return config
 
 
@@ -364,7 +367,6 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     kst["max_file_age_minutes"] = project["kst"].get("max_file_age_minutes", 30)
     kst["max_file_age_hours"] = project["kst"].get("max_file_age_hours", 2)
     for key in (
-        "data_source",
         "installation_root",
         "identity",
         "local_api_url",
@@ -374,7 +376,10 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     ):
         if project["kst"].get(key) not in (None, ""):
             kst[key] = project["kst"][key]
-    kst.setdefault("data_source", "export")
+    kst["data_source"] = normalize_kst_data_source(
+        app_config.get("kst_data_source")
+    )
+    kst["allow_zero_on_unavailable"] = True
     kst["promotion_id_accounts"] = alias_maps["kst_id_to_account"]
     config["kst"] = kst
 
@@ -415,6 +420,26 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
 def normalize_data_source_preference(value: Any) -> str:
     normalized = str(value or "api").strip().lower()
     return normalized if normalized in DATA_SOURCE_PREFERENCES else "api"
+
+
+def normalize_kst_data_source(value: Any) -> str:
+    normalized = str(value or "local_api").strip().lower()
+    return normalized if normalized in KST_DATA_SOURCES else "local_api"
+
+
+def get_kst_data_source(root: str | Path) -> str:
+    return normalize_kst_data_source(load_app_config(root).get("kst_data_source"))
+
+
+def set_kst_data_source(root: str | Path, value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in KST_DATA_SOURCES:
+        raise ValueError("商务通数据源只支持 local_api 或 export")
+    root_path = Path(root)
+    app_config = load_app_config(root_path)
+    app_config["kst_data_source"] = normalized
+    _write_json_atomically(root_path / APP_CONFIG_PATH, app_config)
+    return normalized
 
 
 def get_data_source_preference(root: str | Path) -> str:
