@@ -147,7 +147,16 @@ class KstApiManager(QObject):
                 return
             self._ready = ready
             self._detail = detail
-        self.status_changed.emit(ready, detail)
+        try:
+            self.status_changed.emit(ready, detail)
+        except RuntimeError:
+            pass
+
+    def _emit_log(self, message: str) -> None:
+        try:
+            self.log_message.emit(message)
+        except RuntimeError:
+            pass
 
     def _ensure_service_async(self) -> None:
         with self._lock:
@@ -257,7 +266,7 @@ class KstApiManager(QObject):
                     self._external_server = True
                 if not already_external:
                     self._publish(True, detail)
-                    self.log_message.emit("已复用现有商务通本地 API")
+                    self._emit_log("已复用现有商务通本地 API")
                 return
             with self._lock:
                 lost_external = self._ready and self._external_server
@@ -301,8 +310,8 @@ class KstApiManager(QObject):
                 )
                 server_thread = self._server_thread
             self._publish(True, f"商务通本地 API 已启动：127.0.0.1:{port}")
-            self.log_message.emit("商务通本地 API 已随程序启动")
+            self._emit_log("商务通本地 API 已随程序启动")
             server_thread.start()
         except Exception:
             self._publish(False, "商务通本地 API 启动失败，正在重试")
-            self.log_message.emit("商务通本地 API 暂不可用，将自动重试")
+            self._emit_log("商务通本地 API 暂不可用，将自动重试")

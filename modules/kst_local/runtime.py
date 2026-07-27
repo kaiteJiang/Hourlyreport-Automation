@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,11 @@ def build_live_runtime(
             explicit_root=installation_root or kst_config.get("installation_root"),
             explicit_identity=kst_config.get("identity"),
         )
-    snapshot = parse_log_snapshot(installation.log_dir, target_date)
+    snapshot = parse_log_snapshot(
+        installation.log_dir,
+        target_date,
+        auth_date=date.today().isoformat(),
+    )
     candidates = read_cache_candidates(installation, target_date)
     client = KstApiClient(snapshot.auth)
     service = KstConversationService(

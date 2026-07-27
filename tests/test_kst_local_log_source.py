@@ -87,3 +87,37 @@ def test_log_snapshot_recovers_cached_tag_dictionary(tmp_path: Path):
         "11": "有效-三句",
         "12": "转潜-有效",
     }
+
+
+def test_auth_date_excludes_historical_identity_endpoints(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        "\n".join(
+            [
+                (
+                    "[2020-01-01 09:00:00] request "
+                    "https://old.example/OnlineHd/visitorInfo/load"
+                ),
+                (
+                    "[2020-01-01 09:00:01] request "
+                    "https://old.example/OnlineCore/nv2012/func/"
+                    "ocVisitorCard/detail.do"
+                ),
+                (
+                    "[2020-01-01 09:00:02] request "
+                    "https://old.example/OnlineCore/nv/visitorCard/"
+                    "custTypeQuery.do"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(
+        log_dir,
+        "2026-07-27",
+        auth_date="2026-07-27",
+    )
+
+    assert snapshot.auth.endpoints == {}

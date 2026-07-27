@@ -70,7 +70,11 @@ def _required_endpoints_available(
     installation: KstInstallation,
     target_date: str,
 ) -> bool:
-    snapshot = parse_log_snapshot(installation.log_dir, target_date)
+    snapshot = parse_log_snapshot(
+        installation.log_dir,
+        target_date,
+        auth_date=target_date,
+    )
     required = {"visitor_info", "visitor_card", "tag_dictionary"}
     return required.issubset(snapshot.auth.endpoints)
 

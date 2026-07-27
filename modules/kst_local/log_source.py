@@ -57,7 +57,12 @@ def _find_endpoint(line: str, suffix: str) -> str | None:
     return line[start:end]
 
 
-def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSourceSnapshot:
+def parse_log_snapshot(
+    log_dir: str | Path,
+    target_date: str,
+    *,
+    auth_date: str | None = None,
+) -> AutomaticSourceSnapshot:
     paths = _log_files(Path(log_dir))
     sources: dict[str, set[str]] = {}
     common_query: dict[str, Any] = {}
@@ -67,7 +72,12 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
 
     for path in paths:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.startswith(f"[{target_date} ") and '"msgType":48' in line:
+            source_line = line.startswith(f"[{target_date} ")
+            auth_line = (
+                auth_date is None
+                or line.startswith(f"[{auth_date} ")
+            )
+            if source_line and '"msgType":48' in line:
                 match = PUSH_PATTERN.search(line)
                 if match:
                     sources.setdefault(match.group(1), set()).add(
@@ -80,12 +90,20 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
                         "startup_auto_sync"
                     )
 
-            parsed_common = _decode_json_after(line, "[Api] GlobalCommonParams")
+            parsed_common = (
+                _decode_json_after(line, "[Api] GlobalCommonParams")
+                if auth_line
+                else None
+            )
             if parsed_common is not None:
                 candidate = parsed_common.get("query")
                 common_query = dict(candidate) if isinstance(candidate, dict) else {}
 
-            parsed_headers = _decode_json_after(line, "[Api] GlobalCommonHeaders")
+            parsed_headers = (
+                _decode_json_after(line, "[Api] GlobalCommonHeaders")
+                if auth_line
+                else None
+            )
             if parsed_headers is not None:
                 headers = {
                     str(key): str(value)
@@ -93,12 +111,13 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
                     if value is not None
                 }
 
-            for name, suffix in ENDPOINT_SUFFIXES.items():
-                endpoint = _find_endpoint(line, suffix)
-                if endpoint:
-                    endpoints[name] = endpoint
+            if auth_line:
+                for name, suffix in ENDPOINT_SUFFIXES.items():
+                    endpoint = _find_endpoint(line, suffix)
+                    if endpoint:
+                        endpoints[name] = endpoint
 
-            if ENDPOINT_SUFFIXES["tag_dictionary"] in line:
+            if auth_line and ENDPOINT_SUFFIXES["tag_dictionary"] in line:
                 unescaped = line.replace(r"\"", '"')
                 for match in TAG_PAIR_PATTERN.finditer(unescaped):
                     tag_dictionary[match.group(1)] = match.group(2)
