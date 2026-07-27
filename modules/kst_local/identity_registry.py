@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable
 
 from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import discover_installations
 from modules.kst_local.log_source import parse_cached_log_snapshot
-from modules.kst_local.models import KstInstallation
+from modules.kst_local.models import AutomaticSourceSnapshot, KstInstallation
 from modules.kst_local.runtime import build_live_runtime
 from modules.project_config import (
     build_runtime_config_from_project,
@@ -80,6 +81,29 @@ def _required_endpoints_available(
     return required.issubset(snapshot.auth.endpoints)
 
 
+def _runtime_input_state(
+    installation: KstInstallation,
+    _target_date: str,
+    snapshot: AutomaticSourceSnapshot,
+) -> tuple[Any, ...]:
+    database_state: list[tuple[str, int, int]] = []
+    for path in installation.database_paths:
+        try:
+            stat = path.stat()
+            database_state.append(
+                (str(path), stat.st_size, stat.st_mtime_ns)
+            )
+        except OSError:
+            database_state.append((str(path), -1, -1))
+    return (
+        str(installation.root),
+        installation.identity,
+        tuple(str(path) for path in installation.database_paths),
+        snapshot,
+        tuple(database_state),
+    )
+
+
 class KstIdentityRegistry:
     def __init__(
         self,
@@ -91,8 +115,13 @@ class KstIdentityRegistry:
         project_loader: Callable[[str | Path, str], dict[str, Any]] = load_project_config,
         config_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] = build_runtime_config_from_project,
         runtime_builder: Callable[..., Any] = build_live_runtime,
+        runtime_state_reader: Callable[
+            [KstInstallation, str, AutomaticSourceSnapshot],
+            Any,
+        ] = _runtime_input_state,
         endpoint_checker: Callable[[KstInstallation, str], bool] = _required_endpoints_available,
         promotion_cache_ttl_seconds: float = 300,
+        runtime_cache_ttl_seconds: float = 60,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.root = Path(root)
@@ -102,12 +131,22 @@ class KstIdentityRegistry:
         self._project_loader = project_loader
         self._config_builder = config_builder
         self._runtime_builder = runtime_builder
+        self._runtime_state_reader = runtime_state_reader
         self._endpoint_checker = endpoint_checker
         self._promotion_cache_ttl_seconds = max(
             0.0,
             float(promotion_cache_ttl_seconds),
         )
         self._monotonic = monotonic
+        self._runtime_cache_ttl_seconds = max(
+            0.0,
+            float(runtime_cache_ttl_seconds),
+        )
+        self._runtime_lock = threading.RLock()
+        self._runtime_cache: dict[
+            tuple[str, str],
+            tuple[float, Any, Any],
+        ] = {}
         self._promotion_cache: dict[
             tuple[str, str, tuple[str, ...]],
             tuple[float, frozenset[str]],
@@ -215,12 +254,40 @@ class KstIdentityRegistry:
     def build_runtime(self, project_id: str, target_date: str) -> Any:
         installation = self.installation_for(project_id)
         project = self._project_loader(self.root, project_id)
-        config = self._config_builder(project, {})
-        return self._runtime_builder(
-            config,
+        snapshot = parse_cached_log_snapshot(
+            installation.log_dir,
             target_date,
-            installation=installation,
+            auth_date=date.today().isoformat(),
         )
+        state = (
+            project,
+            self._runtime_state_reader(
+                installation,
+                target_date,
+                snapshot,
+            ),
+        )
+        key = (project_id, target_date)
+        now = self._monotonic()
+        with self._runtime_lock:
+            cached = self._runtime_cache.get(key)
+            if cached is not None:
+                built_at, cached_state, runtime = cached
+                age = now - built_at
+                if (
+                    0 <= age < self._runtime_cache_ttl_seconds
+                    and cached_state == state
+                ):
+                    return runtime
+            config = self._config_builder(project, {})
+            runtime = self._runtime_builder(
+                config,
+                target_date,
+                installation=installation,
+                snapshot=snapshot,
+            )
+            self._runtime_cache[key] = (now, state, runtime)
+            return runtime
 
     def health(self) -> dict[str, Any]:
         all_project_ids = sorted(self._projects)

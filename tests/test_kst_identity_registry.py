@@ -58,6 +58,8 @@ def registry_for(
     endpoint_checker=lambda *_args: True,
     promotion_id_reader=None,
     promotion_cache_ttl_seconds=300,
+    runtime_state_reader=None,
+    runtime_cache_ttl_seconds=60,
     monotonic=None,
 ):
     installations = [
@@ -71,6 +73,8 @@ def registry_for(
     kwargs = {}
     if monotonic is not None:
         kwargs["monotonic"] = monotonic
+    if runtime_state_reader is not None:
+        kwargs["runtime_state_reader"] = runtime_state_reader
     return KstIdentityRegistry(
         tmp_path,
         projects_loader=lambda _root: projects,
@@ -93,6 +97,7 @@ def registry_for(
         ),
         endpoint_checker=endpoint_checker,
         promotion_cache_ttl_seconds=promotion_cache_ttl_seconds,
+        runtime_cache_ttl_seconds=runtime_cache_ttl_seconds,
         **kwargs,
     )
 
@@ -184,6 +189,58 @@ def test_registry_build_runtime_passes_only_bound_installation(tmp_path):
 
     assert result is sentinel
     assert calls[-1] == ("a", "2026-07-27", "id-a")
+
+
+def test_registry_reuses_runtime_when_semantic_inputs_are_unchanged(tmp_path):
+    now = [100.0]
+    calls = []
+    state = ["v1"]
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        runtime_builder=lambda *_args, **_kwargs: (
+            calls.append(1) or HealthyRuntime()
+        ),
+        runtime_state_reader=lambda *_args: state[0],
+        runtime_cache_ttl_seconds=60,
+        monotonic=lambda: now[0],
+    )
+    registry.refresh()
+
+    first = registry.build_runtime("a", "2026-07-27")
+    second = registry.build_runtime("a", "2026-07-27")
+
+    assert first is second
+    assert calls == [1]
+
+
+def test_registry_rebuilds_runtime_on_state_change_or_ttl_expiry(tmp_path):
+    now = [100.0]
+    calls = []
+    state = ["v1"]
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        runtime_builder=lambda *_args, **_kwargs: (
+            calls.append(1) or HealthyRuntime()
+        ),
+        runtime_state_reader=lambda *_args: state[0],
+        runtime_cache_ttl_seconds=60,
+        monotonic=lambda: now[0],
+    )
+    registry.refresh()
+
+    first = registry.build_runtime("a", "2026-07-27")
+    state[0] = "v2"
+    second = registry.build_runtime("a", "2026-07-27")
+    now[0] += 61
+    third = registry.build_runtime("a", "2026-07-27")
+
+    assert first is not second
+    assert second is not third
+    assert calls == [1, 1, 1]
 
 
 def test_registry_with_no_binding_is_not_healthy(tmp_path):

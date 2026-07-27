@@ -38,6 +38,7 @@ def build_live_runtime(
     *,
     installation_root: str | Path | None = None,
     installation: KstInstallation | None = None,
+    snapshot: AutomaticSourceSnapshot | None = None,
 ) -> KstLiveRuntime:
     kst_config = config.get("kst", {}) or {}
     if installation is None:
@@ -45,11 +46,12 @@ def build_live_runtime(
             explicit_root=installation_root or kst_config.get("installation_root"),
             explicit_identity=kst_config.get("identity"),
         )
-    snapshot = parse_cached_log_snapshot(
-        installation.log_dir,
-        target_date,
-        auth_date=date.today().isoformat(),
-    )
+    if snapshot is None:
+        snapshot = parse_cached_log_snapshot(
+            installation.log_dir,
+            target_date,
+            auth_date=date.today().isoformat(),
+        )
     candidates = read_cache_candidates(installation, target_date)
     client = KstApiClient(snapshot.auth)
     service = KstConversationService(
