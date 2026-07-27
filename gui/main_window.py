@@ -8,6 +8,7 @@ import sys
 from collections import deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QDate, QEasingCurve, QPoint, QPropertyAnimation, QRect, QRectF, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import (
@@ -68,6 +69,7 @@ from gui.environment_check import (
 from gui.log_formatter import format_log_fragment
 from gui.log_history import append_history_line, typewriter_batch_size
 from gui.kst_status_control import KstStatusControl
+from gui.kst_api_manager import KstApiManager
 from gui.pet_settings import (
     PET_CLAWD,
     PET_HIDDEN,
@@ -1542,7 +1544,12 @@ class ModernCalendarDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, root: str | Path):
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        kst_api_manager_factory: Callable[..., KstApiManager] = KstApiManager,
+    ):
         super().__init__()
         self.root = Path(root)
         self.projects: list[ProjectSummary] = []
@@ -1579,6 +1586,7 @@ class MainWindow(QMainWindow):
         self._multi_task_active = False
         self._saved_multi_project_ids: list[str] = []
         self._quit_after_task = False
+        self._kst_api_stopped = False
         self._pet_scale_save_timer = QTimer(self)
         self._pet_scale_save_timer.setSingleShot(True)
         self._pet_scale_save_timer.setInterval(250)
@@ -1613,6 +1621,11 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_style()
         self._build_tray()
+        self.kst_api_manager = kst_api_manager_factory(self.root)
+        self.kst_api_manager.status_changed.connect(
+            self.on_kst_api_status_changed
+        )
+        self.kst_api_manager.log_message.connect(self.append_log)
         self.update_manager = GitHubUpdateManager(self)
         self.update_manager.checking.connect(self.on_update_checking)
         self.update_manager.available.connect(self.on_update_available)
@@ -1631,6 +1644,7 @@ class MainWindow(QMainWindow):
         self.desktop_pet.set_enabled(self.pet_mode == PET_CLAWD)
         self.refresh_projects()
         self.set_current_flow_idle()
+        QTimer.singleShot(0, self.start_kst_api)
         QTimer.singleShot(0, self.run_startup_check)
         QTimer.singleShot(450, self.show_pet_greeting)
 
@@ -3233,6 +3247,20 @@ class MainWindow(QMainWindow):
         self.kst_status_control.set_source_mode(mode)
         self.append_log(f"[设置] 商务通来源已切换为{label}")
 
+    def start_kst_api(self) -> None:
+        if self._kst_api_stopped:
+            return
+        self.kst_api_manager.start()
+
+    def stop_kst_api(self) -> None:
+        if self._kst_api_stopped:
+            return
+        self._kst_api_stopped = True
+        self.kst_api_manager.stop()
+
+    def on_kst_api_status_changed(self, ready: bool, detail: str) -> None:
+        self.kst_status_control.set_api_ready(ready, detail)
+
     def set_excel_auto_open(self, enabled: bool) -> None:
         previous = self.open_excel_automatically
         try:
@@ -3311,6 +3339,7 @@ class MainWindow(QMainWindow):
             self._pet_scale_save_timer.stop()
             self._persist_desktop_pet_scale()
         self._quitting = True
+        self.stop_kst_api()
         self.tray_icon.hide()
         self.tray_icon.setContextMenu(None)
         self.desktop_pet.close_pet()
@@ -4217,9 +4246,16 @@ class MainWindow(QMainWindow):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
-def create_window(root: str | Path) -> MainWindow:
+def create_window(
+    root: str | Path,
+    *,
+    kst_api_manager_factory: Callable[..., KstApiManager] = KstApiManager,
+) -> MainWindow:
     startup_kst_initialization = initialize_kst_directories_once()
-    window = MainWindow(root)
+    window = MainWindow(
+        root,
+        kst_api_manager_factory=kst_api_manager_factory,
+    )
     window.startup_kst_initialization = startup_kst_initialization
     window.show()
     window.start_update_check()

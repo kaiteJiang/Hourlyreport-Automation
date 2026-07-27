@@ -109,6 +109,7 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(icon)))
     window = create_window(root)
     instance_guard.activate_requested.connect(window.show_console)
+    app.aboutToQuit.connect(window.stop_kst_api)
     app.aboutToQuit.connect(instance_guard.close)
     window.raise_()
     return app.exec()
