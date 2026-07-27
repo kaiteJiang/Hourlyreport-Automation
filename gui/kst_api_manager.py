@@ -104,18 +104,11 @@ class KstApiManager(QObject):
             server = self._server if self._owns_server else None
             worker = self._worker
             server_thread = self._server_thread
-            self._server = None
-            self._registry = None
-            self._server_thread = None
-            self._owns_server = False
             self._external_server = False
             self._ready = False
             self._detail = "商务通 API 已停止"
         if server is not None:
-            try:
-                server.shutdown()
-            finally:
-                server.server_close()
+            server.shutdown()
         if (
             worker is not None
             and worker.is_alive()
@@ -128,6 +121,21 @@ class KstApiManager(QObject):
             and server_thread is not threading.current_thread()
         ):
             server_thread.join(timeout=5)
+        close_fallback = False
+        with self._lock:
+            if self._server is server and server is not None:
+                self._server = None
+                self._server_thread = None
+                self._registry = None
+                self._owns_server = False
+                close_fallback = True
+            elif server is None:
+                self._server = None
+                self._server_thread = None
+                self._registry = None
+                self._owns_server = False
+        if close_fallback:
+            server.server_close()
 
     def is_ready(self) -> bool:
         with self._lock:
