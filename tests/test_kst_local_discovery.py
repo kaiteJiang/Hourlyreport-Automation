@@ -25,6 +25,8 @@ def _build_installation(tmp_path: Path) -> tuple[Path, Path]:
     db_dir.mkdir(parents=True)
     (log_dir / "app.log").write_text("ready", encoding="utf-8")
     (db_dir / "VISITOR.db").write_bytes(b"db")
+    (db_dir / "VISITOR_20260726_090202.db").write_bytes(b"rotated")
+    (db_dir / "VISITOR.db-wal").write_bytes(b"wal")
     return root, local_app_data
 
 
@@ -43,9 +45,10 @@ def test_explicit_root_discovers_current_identity_and_capabilities(tmp_path):
     assert found.log_dir == (
         local_app_data / "OnlineWebCSNew" / "log" / found.identity
     ).resolve()
-    assert found.database_paths == (
-        (local_app_data / "OnlineWebCSNew" / "db" / found.identity / "VISITOR.db").resolve(),
-    )
+    assert {path.name for path in found.database_paths} == {
+        "VISITOR.db",
+        "VISITOR_20260726_090202.db",
+    }
     assert found.sqlite_module_dir.name == "better-sqlite3-multiple-ciphers"
 
 

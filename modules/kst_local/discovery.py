@@ -76,8 +76,9 @@ def _discover_identity(
                 sorted(
                     (
                         path.resolve()
-                        for path in db_dir.rglob("VISITOR.db")
+                        for path in db_dir.rglob("VISITOR*.db")
                         if path.is_file()
+                        and not path.name.endswith(("-wal", "-shm"))
                     ),
                     key=str,
                 )

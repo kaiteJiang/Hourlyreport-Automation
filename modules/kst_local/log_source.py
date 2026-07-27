@@ -12,6 +12,9 @@ PUSH_PATTERN = re.compile(
     r'"msgType"\s*:\s*48.*?"msgContent"\s*:\s*\[?\s*"?(\d+)'
 )
 SYNC_REC_ID_PATTERN = re.compile(r'\\?"recId\\?"\s*:\s*\\?"?(\d+)')
+TAG_PAIR_PATTERN = re.compile(
+    r'"typeid"\s*:\s*"?(\d+)"?.*?"typename"\s*:\s*"([^"]+)"'
+)
 ENDPOINT_SUFFIXES = {
     "visitor_info": "OnlineHd/visitorInfo/load",
     "dialog_records": "OnlineHd/dialogRecord/recordsByRecIdNew",
@@ -60,6 +63,7 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
     common_query: dict[str, Any] = {}
     headers: dict[str, str] = {}
     endpoints: dict[str, str] = {}
+    tag_dictionary: dict[str, str] = {}
 
     for path in paths:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -94,6 +98,11 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
                 if endpoint:
                     endpoints[name] = endpoint
 
+            if ENDPOINT_SUFFIXES["tag_dictionary"] in line:
+                unescaped = line.replace(r"\"", '"')
+                for match in TAG_PAIR_PATTERN.finditer(unescaped):
+                    tag_dictionary[match.group(1)] = match.group(2)
+
     return AutomaticSourceSnapshot(
         sources_by_rec_id={
             rec_id: frozenset(source_names)
@@ -104,5 +113,6 @@ def parse_log_snapshot(log_dir: str | Path, target_date: str) -> AutomaticSource
             headers=headers,
             endpoints=endpoints,
         ),
+        tag_dictionary=tag_dictionary,
         log_files=paths,
     )

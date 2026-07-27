@@ -126,3 +126,26 @@ def test_service_fails_instead_of_turning_query_failure_into_zero():
         assert "101" in str(exc)
     else:
         raise AssertionError("KstServiceError was not raised")
+
+
+def test_service_uses_cached_log_tags_when_live_tag_endpoint_is_unavailable():
+    class CachedTagClient(FakeClient):
+        def load_tag_dictionary(self):
+            raise AssertionError("live tag endpoint must not be called")
+
+    base = _snapshot()
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id=base.sources_by_rec_id,
+        auth=base.auth,
+        tag_dictionary={"11": "有效-三句", "12": "转潜-有效"},
+    )
+    service = KstConversationService(
+        config=_config(),
+        snapshot=snapshot,
+        candidates=_candidates(),
+        client=CachedTagClient(),
+    )
+
+    conversations = service.collect("2026-07-27")
+
+    assert conversations[0].tags == ("有效-三句", "转潜-有效")

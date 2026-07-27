@@ -58,7 +58,11 @@ class KstConversationService:
     def collect(self, target_date: str) -> list[KstConversation]:
         if target_date in self._cache:
             return list(self._cache[target_date])
-        tag_map = self._client.load_tag_dictionary()
+        tag_map = (
+            dict(self._snapshot.tag_dictionary)
+            if self._snapshot.tag_dictionary
+            else self._client.load_tag_dictionary()
+        )
         allowed = self._snapshot.sources_by_rec_id
         selected = [row for row in self._candidates if row.rec_id in allowed]
         conversations: list[KstConversation] = []

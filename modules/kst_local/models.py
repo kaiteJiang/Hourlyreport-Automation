@@ -45,6 +45,7 @@ class KstAuthContext:
 class AutomaticSourceSnapshot:
     sources_by_rec_id: dict[str, frozenset[str]]
     auth: KstAuthContext
+    tag_dictionary: dict[str, str] = field(default_factory=dict)
     log_files: tuple[Path, ...] = ()
 
     def safe_diagnostics(self) -> dict[str, Any]:
@@ -55,6 +56,7 @@ class AutomaticSourceSnapshot:
         return {
             "automatic_conversation_count": len(self.sources_by_rec_id),
             "source_counts": counts,
+            "tag_dictionary_size": len(self.tag_dictionary),
             "log_file_count": len(self.log_files),
             "auth": self.auth.safe_diagnostics(),
         }

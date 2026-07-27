@@ -66,3 +66,24 @@ def test_log_snapshot_discovers_auth_and_endpoints_without_safe_token_leak(tmp_p
     assert secret not in str(safe)
     assert safe["auth"]["common_query_available"] is True
     assert safe["auth"]["headers_available"] is True
+
+
+def test_log_snapshot_recovers_cached_tag_dictionary(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        (
+            "[2026-07-27 08:00:00] "
+            "https://chat.example/OnlineCore/nv/visitorCard/custTypeQuery.do "
+            r'response {\"bean\":[{\"typeid\":11,\"typename\":\"有效-三句\"},'
+            r'{\"typeid\":12,\"typename\":\"转潜-有效\"}]}'
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-07-27")
+
+    assert snapshot.tag_dictionary == {
+        "11": "有效-三句",
+        "12": "转潜-有效",
+    }
