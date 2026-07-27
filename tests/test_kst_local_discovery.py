@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import time
 
 import pytest
 
@@ -86,3 +88,26 @@ def test_discover_installations_returns_every_identity(tmp_path):
         "300_ccc",
         "733875_1269870",
     ]
+
+
+def test_discover_installations_excludes_historical_inactive_identity(tmp_path):
+    root, local_app_data = _build_installation(tmp_path)
+    stale_identity = "100_stale"
+    log_dir = local_app_data / "OnlineWebCSNew" / "log" / stale_identity
+    db_dir = local_app_data / "OnlineWebCSNew" / "db" / stale_identity
+    log_dir.mkdir(parents=True)
+    db_dir.mkdir(parents=True)
+    log_file = log_dir / "app.log"
+    log_file.write_text("old", encoding="utf-8")
+    (db_dir / "VISITOR.db").write_bytes(b"db")
+    stale_time = time.time() - 3600
+    os.utime(log_file, (stale_time, stale_time))
+    os.utime(log_dir, (stale_time, stale_time))
+
+    found = discover_installations(
+        explicit_root=root,
+        local_app_data=local_app_data,
+        active_within_seconds=300,
+    )
+
+    assert [item.identity for item in found] == ["733875_1269870"]

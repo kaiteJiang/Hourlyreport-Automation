@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import time
 from typing import Iterable
 
 from modules.kst_local.models import KstInstallation
@@ -61,6 +62,7 @@ def _latest_log_mtime(log_dir: Path) -> float:
 
 def _identity_candidates(
     local_app_data: Path,
+    active_within_seconds: float | None = None,
 ) -> list[tuple[float, str, Path, tuple[Path, ...]]]:
     data_root = local_app_data / "OnlineWebCSNew"
     log_root = data_root / "log"
@@ -83,9 +85,16 @@ def _identity_candidates(
                 )
             )
             if database_paths:
+                latest_log_mtime = _latest_log_mtime(log_dir)
+                if (
+                    active_within_seconds is not None
+                    and time.time() - latest_log_mtime
+                    > active_within_seconds
+                ):
+                    continue
                 candidates.append(
                     (
-                        _latest_log_mtime(log_dir),
+                        latest_log_mtime,
                         log_dir.name,
                         log_dir.resolve(),
                         database_paths,
@@ -147,6 +156,7 @@ def _resolve_installation_root(
 def discover_installations(
     explicit_root: str | Path | None = None,
     local_app_data: str | Path | None = None,
+    active_within_seconds: float = 300,
 ) -> list[KstInstallation]:
     root, electron, sqlite_module, version = _resolve_installation_root(
         explicit_root
@@ -156,7 +166,10 @@ def discover_installations(
         if local_app_data is not None
         else os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
     ).expanduser().resolve()
-    candidates = _identity_candidates(local_root)
+    candidates = _identity_candidates(
+        local_root,
+        active_within_seconds=active_within_seconds,
+    )
     if not candidates:
         data_root = local_root / "OnlineWebCSNew"
         raise KstDiscoveryError(
