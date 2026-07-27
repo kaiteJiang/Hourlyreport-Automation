@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
-  echo .venv not found. Please run setup_env.bat first.
+  echo .venv not found. Please run install_env.bat first.
   pause
   exit /b 1
 )

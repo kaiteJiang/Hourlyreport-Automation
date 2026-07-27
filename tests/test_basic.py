@@ -4794,15 +4794,26 @@ def test_doctor_check_labels_cover_all_checks():
     assert all(isinstance(v, str) for v in _DOCTOR_CHECK_LABELS.values())
 
 
-def test_run_bat_files_support_dragged_kst_file_argument():
-    from pathlib import Path
-
+def test_obsolete_root_entry_bats_are_removed():
     root = Path(__file__).resolve().parents[1]
-    for name, period in [("run_11.bat", "11"), ("run_15.bat", "15"), ("run_18.bat", "18")]:
-        text = (root / name).read_text(encoding="utf-8")
-        assert f"--period {period}" in text
-        assert 'set "KST_FILE=%~1"' in text
-        assert '--file "%KST_FILE%"' in text
+    obsolete = {
+        "create_config.bat",
+        "run_11.bat",
+        "run_15.bat",
+        "run_18.bat",
+        "run_fetch_baidu.bat",
+        "run_fetch_baidu_15.bat",
+        "run_inspect.bat",
+        "run_mock_write.bat",
+        "run_parse_kst_export_15.bat",
+        "run_test_browser_connect.bat",
+        "setup_env.bat",
+        "START_HERE.bat",
+    }
+
+    assert not sorted(
+        name for name in obsolete if (root / name).exists()
+    )
 
 
 def test_hermes_hourly_bat_fixes_utf8_and_runs_preflight_before_hourly_pipeline():
@@ -9494,6 +9505,12 @@ def test_gitignore_excludes_exported_authorization_packages():
     }
     assert "*.baidu-secrets" in ignored_patterns
     assert "secrets/*.lock" in ignored_patterns
+    assert ".claude/settings.local.json" in ignored_patterns
+    assert "diagnostics/" in ignored_patterns
+    assert "configs/multi_project_selection.json" in ignored_patterns
+    assert "credentials.local.json.lock" in ignored_patterns
+    assert "!samples/.gitkeep" in ignored_patterns
+    assert "reports/*" in ignored_patterns
 
 
 def test_internal_build_excludes_secrets_json():
