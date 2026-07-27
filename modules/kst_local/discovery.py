@@ -8,6 +8,7 @@ import time
 from typing import Callable, Iterable
 
 from modules.kst_local.models import KstInstallation
+from modules.kst_local.subprocess_utils import hidden_subprocess_kwargs
 
 
 class KstDiscoveryError(RuntimeError):
@@ -23,11 +24,15 @@ def _active_log_max_age_seconds() -> float:
     return min(max(value, 30), 86_400)
 
 
-def _client_process_running(electron: Path) -> bool:
+def _client_process_running(
+    electron: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> bool:
     if os.name != "nt":
         return True
     try:
-        completed = subprocess.run(
+        completed = runner(
             [
                 "tasklist",
                 "/FI",
@@ -40,6 +45,7 @@ def _client_process_running(electron: Path) -> bool:
             capture_output=True,
             text=True,
             timeout=5,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

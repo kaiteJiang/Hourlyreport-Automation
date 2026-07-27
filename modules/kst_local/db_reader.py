@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.kst_local.models import KstCacheCandidate, KstInstallation
+from modules.kst_local.subprocess_utils import hidden_subprocess_kwargs
 
 
 class KstDatabaseError(RuntimeError):
@@ -14,6 +15,18 @@ class KstDatabaseError(RuntimeError):
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _run_hidden(
+    runner: Runner,
+    command: list[str],
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
+    return runner(
+        command,
+        **hidden_subprocess_kwargs(),
+        **kwargs,
+    )
 
 
 def _score(row: KstCacheCandidate) -> int:
@@ -91,7 +104,8 @@ def read_cache_candidates(
             str(installation.sqlite_module_dir),
         ]
         try:
-            completed = runner(
+            completed = _run_hidden(
+                runner,
                 command,
                 env=env,
                 check=True,
@@ -151,7 +165,8 @@ def read_identity_promotion_ids(
             str(installation.sqlite_module_dir),
         ]
         try:
-            completed = runner(
+            completed = _run_hidden(
+                runner,
                 command,
                 env=env,
                 check=True,

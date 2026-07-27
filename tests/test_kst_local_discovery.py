@@ -1,12 +1,14 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
 
 import pytest
 
 from modules.kst_local.discovery import (
     KstDiscoveryError,
+    _client_process_running,
     discover_installation,
     discover_installations,
 )
@@ -165,3 +167,28 @@ def test_registry_discovery_can_require_running_client_process(tmp_path):
             require_running_process=True,
             process_checker=lambda _electron: False,
         )
+
+
+def test_client_process_check_runs_without_a_console_window():
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='"OnlineWebCS.exe","123"',
+            stderr="",
+        )
+
+    assert _client_process_running(
+        Path("OnlineWebCS.exe"),
+        runner=runner,
+    )
+    _, kwargs = calls[0]
+    if os.name == "nt":
+        assert (
+            kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+        ) == subprocess.CREATE_NO_WINDOW
+    else:
+        assert "creationflags" not in kwargs

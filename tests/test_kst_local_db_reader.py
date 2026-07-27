@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -93,6 +94,12 @@ def test_reader_runs_client_electron_in_node_mode_and_deduplicates(tmp_path):
         assert kwargs["env"]["ELECTRON_RUN_AS_NODE"] == "1"
         assert kwargs["check"] is True
         assert kwargs["capture_output"] is True
+        if os.name == "nt":
+            assert (
+                kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+            ) == subprocess.CREATE_NO_WINDOW
+        else:
+            assert "creationflags" not in kwargs
     assert len(rows) == 1
     assert rows[0].rec_id == "101"
     assert rows[0].promotion_id in {"", "72828178"}
@@ -128,6 +135,7 @@ def test_javascript_bridge_is_readonly_and_contains_no_mutation_sql():
 
 def test_read_identity_promotion_ids_merges_all_rotated_databases(tmp_path):
     installation = _installation(tmp_path)
+    calls = []
     outputs = iter(
         [
             {"promotionIds": ["72828178", "72828179"]},
@@ -136,6 +144,7 @@ def test_read_identity_promotion_ids_merges_all_rotated_databases(tmp_path):
     )
 
     def runner(command, **kwargs):
+        calls.append(kwargs)
         return subprocess.CompletedProcess(
             command,
             0,
@@ -146,6 +155,14 @@ def test_read_identity_promotion_ids_merges_all_rotated_databases(tmp_path):
     result = read_identity_promotion_ids(installation, runner=runner)
 
     assert result == {"72828178", "72828179", "81509165"}
+    if os.name == "nt":
+        assert all(
+            (kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW)
+            == subprocess.CREATE_NO_WINDOW
+            for kwargs in calls
+        )
+    else:
+        assert all("creationflags" not in kwargs for kwargs in calls)
 
 
 def test_promotion_id_bridge_is_readonly_and_returns_no_visitor_fields():
