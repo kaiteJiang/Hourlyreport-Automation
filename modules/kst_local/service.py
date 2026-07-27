@@ -12,7 +12,7 @@ from modules.kst_local.models import (
     KstCacheCandidate,
     KstConversation,
 )
-from modules.kst_daily_parser import aggregate_kst_daily_rows
+from modules.kst_daily_aggregation import aggregate_kst_daily_rows
 from modules.kst_parser import aggregate_kst_export_rows
 
 

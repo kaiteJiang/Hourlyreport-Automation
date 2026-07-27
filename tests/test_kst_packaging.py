@@ -1,7 +1,32 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from tools.build_desktop_exe import source_fingerprint
+
+
+def test_gui_kst_api_import_graph_does_not_load_tabular_stack():
+    root = Path(__file__).resolve().parents[1]
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; import gui.kst_api_manager; "
+            "blocked = {'pandas', 'numpy'} & set(sys.modules); "
+            "raise SystemExit(','.join(sorted(blocked)) if blocked else 0)"
+        ),
+    ]
+
+    completed = subprocess.run(
+        command,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_desktop_spec_packages_kst_database_bridge():

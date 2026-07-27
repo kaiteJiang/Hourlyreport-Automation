@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.kst_daily_parser import (
+from modules.kst_daily_aggregation import (
     DAILY_KST_METRICS,
     default_daily_kst_date,
     empty_daily_kst_accounts,
