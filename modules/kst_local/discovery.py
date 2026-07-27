@@ -164,10 +164,19 @@ def _discover_identity(
 def _resolve_installation_root(
     explicit_root: str | Path | None = None,
 ) -> tuple[Path, Path, Path, str]:
+    environment_root = os.environ.get("KST_INSTALLATION_ROOT")
+    root_source = "explicit"
+    if explicit_root is None and environment_root:
+        explicit_root = environment_root
+        root_source = "environment"
     if explicit_root is not None:
         try:
             root, electron, sqlite_module, version = _validate_root(Path(explicit_root))
         except KstDiscoveryError as exc:
+            if root_source == "environment":
+                raise KstDiscoveryError(
+                    f"KST_INSTALLATION_ROOT 配置无效：{exc}"
+                ) from exc
             raise KstDiscoveryError(f"显式配置的商务通根目录无效：{exc}") from exc
     else:
         attempts: list[str] = []

@@ -66,6 +66,28 @@ def test_invalid_explicit_root_fails_instead_of_falling_back(tmp_path):
         )
 
 
+def test_environment_root_is_authoritative_instead_of_falling_back(
+    tmp_path,
+    monkeypatch,
+):
+    root, local_app_data = _build_installation(tmp_path)
+    fallback_base = tmp_path / "fallback-program-files"
+    fallback_root = (
+        fallback_base / "KuaishangSoftx64" / "OnlineWebCSNew"
+    )
+    fallback_root.parent.mkdir(parents=True)
+    root.rename(fallback_root)
+    monkeypatch.setenv(
+        "KST_INSTALLATION_ROOT",
+        str(tmp_path / "explicit-missing"),
+    )
+    monkeypatch.setenv("ProgramFiles", str(fallback_base))
+    monkeypatch.setenv("ProgramFiles(x86)", str(fallback_base))
+
+    with pytest.raises(KstDiscoveryError, match="KST_INSTALLATION_ROOT"):
+        discover_installations(local_app_data=local_app_data)
+
+
 def test_discover_installations_returns_every_identity(tmp_path):
     root, local_app_data = _build_installation(tmp_path)
     data_root = local_app_data / "OnlineWebCSNew"
