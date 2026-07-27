@@ -172,7 +172,7 @@ def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
     manager.stop()
 
 
-def test_owned_server_periodically_refreshes_identity_registry(qapp, tmp_path):
+def test_owned_server_periodically_reuses_identity_registry(qapp, tmp_path):
     server = FakeServer()
     registries = []
 
@@ -192,8 +192,10 @@ def test_owned_server_periodically_refreshes_identity_registry(qapp, tmp_path):
     manager.start()
 
     assert wait_until(manager.is_ready)
-    assert wait_until(lambda: len(registries) >= 2)
-    assert all(item.refresh_calls == 1 for item in registries)
+    assert wait_until(
+        lambda: len(registries) == 1
+        and registries[0].refresh_calls >= 2
+    )
     manager.stop()
 
 

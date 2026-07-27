@@ -56,6 +56,9 @@ def registry_for(
     *,
     runtime_builder=None,
     endpoint_checker=lambda *_args: True,
+    promotion_id_reader=None,
+    promotion_cache_ttl_seconds=300,
+    monotonic=None,
 ):
     installations = [
         installation(tmp_path, identity)
@@ -65,11 +68,16 @@ def registry_for(
         identity: set(ids)
         for identity, ids in identities.items()
     }
+    kwargs = {}
+    if monotonic is not None:
+        kwargs["monotonic"] = monotonic
     return KstIdentityRegistry(
         tmp_path,
         projects_loader=lambda _root: projects,
         installations_loader=lambda: installations,
-        promotion_id_reader=lambda item: ids_by_identity[item.identity],
+        promotion_id_reader=promotion_id_reader or (
+            lambda item: ids_by_identity[item.identity]
+        ),
         project_loader=lambda _root, project_id: next(
             item for item in projects if item["project_id"] == project_id
         ),
@@ -84,6 +92,8 @@ def registry_for(
             lambda *_args, **_kwargs: HealthyRuntime()
         ),
         endpoint_checker=endpoint_checker,
+        promotion_cache_ttl_seconds=promotion_cache_ttl_seconds,
+        **kwargs,
     )
 
 
@@ -225,3 +235,29 @@ def test_health_diagnostics_expose_no_identity_or_promotion_ids(tmp_path):
     }
     assert "private_identity" not in repr(health)
     assert "10001" not in repr(health)
+
+
+def test_registry_caches_promotion_ids_until_ttl_expires(tmp_path):
+    now = [100.0]
+    calls = []
+
+    def promotion_id_reader(item):
+        calls.append(item.identity)
+        return {"10001"}
+
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"])],
+        identities={"id-a": {"10001"}},
+        promotion_id_reader=promotion_id_reader,
+        promotion_cache_ttl_seconds=300,
+        monotonic=lambda: now[0],
+    )
+
+    registry.refresh()
+    registry.refresh()
+
+    assert calls == ["id-a"]
+    now[0] += 301
+    registry.refresh()
+    assert calls == ["id-a", "id-a"]

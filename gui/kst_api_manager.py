@@ -186,8 +186,13 @@ class KstApiManager(QObject):
         worker.start()
 
     def _refresh_owned_registry(self) -> None:
+        with self._lock:
+            if self._stopping or not self._owns_server:
+                return
+            registry = self._registry
         try:
-            registry = self._registry_factory(self._root)
+            if registry is None:
+                registry = self._registry_factory(self._root)
             registry.refresh()
             health = registry.health()
             ready = (
