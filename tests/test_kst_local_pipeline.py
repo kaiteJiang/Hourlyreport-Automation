@@ -5,11 +5,17 @@ from modules.run_pipeline import run_half_auto_pipeline
 
 
 class Logger:
+    def __init__(self):
+        self.warnings = []
+
     def info(self, *args, **kwargs):
         pass
 
     def error(self, *args, **kwargs):
         pass
+
+    def warning(self, message, *args, **kwargs):
+        self.warnings.append(message % args if args else message)
 
 
 def _config():
@@ -87,6 +93,52 @@ def test_hourly_pipeline_uses_local_api_without_looking_for_export(tmp_path):
     assert report["kst_data_source"] == "local_api"
 
 
+def test_hourly_pipeline_accepts_api_zero_fallback_and_warns(tmp_path):
+    logger = Logger()
+
+    def fetch_baidu(**kwargs):
+        return {
+            "date": "2026-07-27",
+            "period": "15点",
+            "data_source": "api",
+            "errors": [],
+        }
+
+    def fetch_local(config, root, period, target_date=None):
+        return {
+            "dialog_data": {"source": "kst_local_api_unavailable_zero"},
+            "parse_report": {"passed": True, "errors": []},
+            "outputs": {},
+        }
+
+    report = run_half_auto_pipeline(
+        config=_config(),
+        root=tmp_path,
+        logger=logger,
+        period="15点",
+        kst_file=None,
+        assume_yes=True,
+        fetch_baidu_func=fetch_baidu,
+        fetch_kst_local_func=fetch_local,
+        merge_func=lambda **kwargs: {
+            "validate_report": {"passed": True, "errors": []},
+            "outputs": {},
+            "merged": {"date": "2026-07-27", "period": "15点"},
+        },
+        write_func=lambda **kwargs: {
+            "errors": [],
+            "self_check": {"verification_passed": True},
+            "writes": [],
+            "excel_path": str(tmp_path / "fake.xlsx"),
+            "date": "2026-07-27",
+            "period": "15点",
+        },
+    )
+
+    assert report["passed"] is True
+    assert any("API 不可用" in warning and "按 0 继续" in warning for warning in logger.warnings)
+
+
 def test_runtime_config_preserves_kst_local_api_fields():
     project = {
         "project_id": "kunming_niu",
@@ -105,6 +157,7 @@ def test_runtime_config_preserves_kst_local_api_fields():
             "identity": "733875_1269870",
             "local_api_url": "http://127.0.0.1:18766",
             "local_api_token_env": "KST_LOCAL_API_TOKEN",
+            "allow_zero_on_unavailable": True,
         },
         "baidu": {"credential_profile": "demo"},
         "accounts": [
@@ -123,3 +176,4 @@ def test_runtime_config_preserves_kst_local_api_fields():
     assert runtime["kst"]["data_source"] == "local_api"
     assert runtime["kst"]["installation_root"] == r"D:\KST"
     assert runtime["kst"]["identity"] == "733875_1269870"
+    assert runtime["kst"]["allow_zero_on_unavailable"] is True

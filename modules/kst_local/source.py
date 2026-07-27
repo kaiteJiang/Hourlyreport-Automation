@@ -5,10 +5,13 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
+from modules.kst_parser import empty_kst_accounts
 from modules.kst_local.runtime import write_hourly_report
+from modules.validators import get_required_accounts
 
 
 class KstLocalSourceError(RuntimeError):
@@ -44,6 +47,59 @@ def _validate_loopback_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def write_unavailable_zero_result(
+    config: dict[str, Any],
+    root: Path,
+    period: str | None,
+    target_date: str | None,
+    reason: str,
+) -> dict[str, Any]:
+    summary = {
+        "raw_rows": 0,
+        "matched_rows": 0,
+        "unmatched_rows": 0,
+        "api_unavailable": True,
+    }
+    payload = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": target_date or date.today().isoformat(),
+        "period": period or "15点",
+        "source": "kst_local_api_unavailable_zero",
+        "accounts": empty_kst_accounts(get_required_accounts(config)),
+        "summary": summary,
+        "errors": [],
+    }
+    parse_report = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": payload["date"],
+        "period": payload["period"],
+        "source": payload["source"],
+        "passed": True,
+        "summary": summary,
+        "warnings": [reason],
+        "errors": [],
+    }
+    reports_dir = root / "reports"
+    dialog_out = write_hourly_report(
+        payload,
+        reports_dir / "kst_dialog_data.json",
+    )
+    parse_out = write_hourly_report(
+        parse_report,
+        reports_dir / "kst_parse_report.json",
+    )
+    return {
+        "dialog_data": payload,
+        "parse_report": parse_report,
+        "outputs": {
+            "dialog_data": str(dialog_out),
+            "parse_report": str(parse_out),
+        },
+    }
+
+
 def fetch_kst_local_report(
     config: dict[str, Any],
     root: Path,
@@ -72,24 +128,35 @@ def fetch_kst_local_report(
         headers["Authorization"] = f"Bearer {token}"
     timeout = int(kst_config.get("local_api_timeout_seconds") or 60)
     try:
-        payload = transport(
-            f"{base_url}/v1/kst/hourly?{query}",
-            headers,
-            timeout,
-        )
+        try:
+            payload = transport(
+                f"{base_url}/v1/kst/hourly?{query}",
+                headers,
+                timeout,
+            )
+        except KstLocalSourceError:
+            raise
+        except Exception:
+            raise KstLocalSourceError("商务通本地 API 请求失败") from None
+        if not isinstance(payload, dict):
+            raise KstLocalSourceError("商务通本地 API 响应结构不兼容")
+        if payload.get("source") != "kst_local_api":
+            raise KstLocalSourceError("商务通本地 API 响应来源不可信")
+        errors = payload.get("errors") or []
+        if errors:
+            raise KstLocalSourceError("商务通本地 API 返回校验错误")
+        if not isinstance(payload.get("accounts"), dict):
+            raise KstLocalSourceError("商务通本地 API 响应缺少账户统计")
     except KstLocalSourceError:
-        raise
-    except Exception:
-        raise KstLocalSourceError("商务通本地 API 请求失败") from None
-    if not isinstance(payload, dict):
-        raise KstLocalSourceError("商务通本地 API 响应结构不兼容")
-    if payload.get("source") != "kst_local_api":
-        raise KstLocalSourceError("商务通本地 API 响应来源不可信")
-    errors = payload.get("errors") or []
-    if errors:
-        raise KstLocalSourceError("商务通本地 API 返回校验错误")
-    if not isinstance(payload.get("accounts"), dict):
-        raise KstLocalSourceError("商务通本地 API 响应缺少账户统计")
+        if not bool(kst_config.get("allow_zero_on_unavailable")):
+            raise
+        return write_unavailable_zero_result(
+            config,
+            root,
+            period,
+            target_date,
+            "商务通本地 API 不可用，商务通指标已按 0 继续",
+        )
 
     reports_dir = root / "reports"
     dialog_out = write_hourly_report(

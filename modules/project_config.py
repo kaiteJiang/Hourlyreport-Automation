@@ -24,6 +24,7 @@ REQUIRED_DAILY_FORBIDDEN_FIELDS = ["总对话", "预约", "到诊", "就诊"]
 REQUIRED_PERIODS = ["11点", "15点", "18点"]
 DATA_SOURCE_MODES = {"browser", "api_shadow", "api_preferred"}
 DATA_SOURCE_PREFERENCES = {"api", "browser"}
+KST_DATA_SOURCES = {"local_api", "export"}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -369,6 +370,7 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
         "local_api_url",
         "local_api_token_env",
         "local_api_timeout_seconds",
+        "allow_zero_on_unavailable",
     ):
         if project["kst"].get(key) not in (None, ""):
             kst[key] = project["kst"][key]
@@ -428,6 +430,36 @@ def set_data_source_preference(root: str | Path, preference: str) -> str:
     app_config["baidu_data_source_preference"] = normalized
     _write_json_atomically(root_path / APP_CONFIG_PATH, app_config)
     return normalized
+
+
+def get_project_kst_data_source(root: str | Path, project_id: str) -> str:
+    root_path = Path(root)
+    app_config = load_app_config(root_path)
+    path = _project_path(root_path, app_config, project_id)
+    if not path.exists():
+        raise FileNotFoundError(f"找不到项目配置文件：{path}")
+    value = str((_read_json(path).get("kst") or {}).get("data_source") or "export")
+    return value if value in KST_DATA_SOURCES else "export"
+
+
+def set_project_kst_data_source(
+    root: str | Path,
+    project_id: str,
+    value: str,
+) -> dict[str, Any]:
+    if value not in KST_DATA_SOURCES:
+        raise ValueError("商务通数据源只支持 local_api 或 export")
+    root_path = Path(root)
+    app_config = load_app_config(root_path)
+    path = _project_path(root_path, app_config, project_id)
+    if not path.exists():
+        raise FileNotFoundError(f"找不到项目配置文件：{path}")
+    project = _read_json(path)
+    kst = dict(project.get("kst") or {})
+    kst["data_source"] = value
+    project["kst"] = kst
+    _write_json_atomically(path, project)
+    return project
 
 
 def _require_nested(errors: list[str], project: dict[str, Any], section: str, key: str) -> None:

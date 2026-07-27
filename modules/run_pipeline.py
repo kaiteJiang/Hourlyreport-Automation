@@ -341,7 +341,14 @@ def run_half_auto_pipeline(
                 log_path=str(root / "logs" / "run.log"),
             )
             return fail("fetch-kst-local", kst_errors)
-        print_step_success("商务通自动来源数据已读取")
+        if (
+            kst_result.get("dialog_data", {}).get("source")
+            == "kst_local_api_unavailable_zero"
+        ):
+            logger.warning("商务通 API 不可用，已按 0 继续")
+            print_step_success("商务通 API 不可用，已按 0 继续")
+        else:
+            print_step_success("商务通自动来源数据已读取")
         logger.info("一键流步骤完成：fetch-kst-local")
     elif export_file is None:
         reason = "未找到 30 分钟内的快商通导出文件，按 0 对话处理"

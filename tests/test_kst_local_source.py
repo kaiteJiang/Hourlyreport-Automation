@@ -10,6 +10,11 @@ def _config(url="http://127.0.0.1:18766"):
     return {
         "project_id": "kunming_niu",
         "project_name": "昆明牛",
+        "accounts": {
+            "银康01": {"excel_name": "银康01"},
+            "银康银屑02": {"excel_name": "银康银屑02"},
+            "银康03": {"excel_name": "银康03"},
+        },
         "kst": {
             "local_api_url": url,
             "local_api_token_env": "TEST_KST_TOKEN",
@@ -61,4 +66,36 @@ def test_source_rejects_non_loopback_url(tmp_path):
             tmp_path,
             "15点",
             transport=lambda *args: {},
+        )
+
+
+def test_api_unavailable_can_emit_zero_kst_report(tmp_path):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+
+    result = fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        target_date="2026-07-27",
+        transport=lambda *_: (_ for _ in ()).throw(OSError("offline")),
+    )
+
+    assert result["parse_report"]["passed"] is True
+    assert result["dialog_data"]["source"] == "kst_local_api_unavailable_zero"
+    assert result["dialog_data"]["summary"]["api_unavailable"] is True
+    assert all(
+        value == 0
+        for account in result["dialog_data"]["accounts"].values()
+        for value in account.values()
+    )
+
+
+def test_api_unavailable_still_raises_without_opt_in(tmp_path):
+    with pytest.raises(KstLocalSourceError, match="请求失败"):
+        fetch_kst_local_report(
+            _config(),
+            tmp_path,
+            "15点",
+            transport=lambda *_: (_ for _ in ()).throw(OSError("offline")),
         )
