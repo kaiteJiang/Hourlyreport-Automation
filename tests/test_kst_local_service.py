@@ -112,6 +112,30 @@ def test_service_excludes_database_only_manual_history_and_deduplicates_sources(
     assert report["summary"]["automatic_rows"] == 1
 
 
+def test_service_builds_daily_report_from_automatic_conversations():
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=_candidates(),
+        client=FakeClient(),
+    )
+
+    report = service.build_daily_report("2026-07-27")
+
+    assert report["project_id"] == "kunming_niu"
+    assert report["date"] == "2026-07-27"
+    assert report["source"] == "kst_local_api"
+    assert report["accounts"]["银康01"] == {
+        "总对话": 1,
+        "有效对话": 1,
+        "无效对话": 0,
+        "一般有效对话": 0,
+        "有效转潜": 1,
+        "总转潜": 1,
+    }
+    assert report["summary"]["automatic_rows"] == 1
+
+
 def test_service_fails_instead_of_turning_query_failure_into_zero():
     service = KstConversationService(
         config=_config(),

@@ -11,6 +11,7 @@ from modules.kst_local.models import (
     KstCacheCandidate,
     KstConversation,
 )
+from modules.kst_daily_parser import aggregate_kst_daily_rows
 from modules.kst_parser import aggregate_kst_export_rows
 
 
@@ -145,6 +146,31 @@ class KstConversationService:
             "project_name": self._config.get("project_name"),
             "date": resolved_date,
             "period": period or "15点",
+            "source": "kst_local_api",
+            "accounts": aggregate["accounts"],
+            "summary": summary,
+            "errors": aggregate.get("errors", []),
+        }
+
+    def build_daily_report(
+        self,
+        target_date: str | None,
+    ) -> dict[str, Any]:
+        resolved_date = target_date or date.today().isoformat()
+        conversations = self.collect(resolved_date)
+        aggregate = aggregate_kst_daily_rows(
+            [self._row(item) for item in conversations],
+            self._config,
+        )
+        summary = dict(aggregate["summary"])
+        summary["automatic_rows"] = len(conversations)
+        summary["automatic_source_counts"] = (
+            self._snapshot.safe_diagnostics()["source_counts"]
+        )
+        return {
+            "project_id": self._config.get("project_id"),
+            "project_name": self._config.get("project_name"),
+            "date": resolved_date,
             "source": "kst_local_api",
             "accounts": aggregate["accounts"],
             "summary": summary,
