@@ -10507,8 +10507,9 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.flow_spinner.objectName() == "clawdAnimator"
     assert window.stage_buttons == []
     assert window.stage_labels == {}
-    assert window.log_ready_badge.text() == "已就绪"
-    assert window.log_ready_badge.parent() is window.log_view.ready_overlay
+    assert window.log_ready_dot.text() == "● KST"
+    assert window.log_ready_badge.text() == "● 实时"
+    assert window.log_view.status_control.parent() is window.log_view.ready_overlay
     window.close()
 
 

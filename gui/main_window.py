@@ -67,6 +67,7 @@ from gui.environment_check import (
 )
 from gui.log_formatter import format_log_fragment
 from gui.log_history import append_history_line, typewriter_batch_size
+from gui.kst_status_control import KstStatusControl
 from gui.pet_settings import (
     PET_CLAWD,
     PET_HIDDEN,
@@ -93,7 +94,9 @@ from gui.version import CURRENT_VERSION
 from modules.project_config import (
     get_data_source_preference,
     get_excel_path,
+    get_project_kst_data_source,
     load_project_config,
+    set_project_kst_data_source,
     set_data_source_preference as save_data_source_preference,
 )
 from modules.excel_path_config import EXCEL_ROOT_NAME, configure_excel_paths
@@ -303,13 +306,11 @@ class LogConsole(QTextEdit):
         overlay_layout = QHBoxLayout(self.ready_overlay)
         overlay_layout.setContentsMargins(0, 0, 0, 0)
         overlay_layout.setSpacing(6)
-        self.ready_dot = QLabel()
-        self.ready_dot.setObjectName("logReadyDot")
-        self.ready_dot.setFixedSize(10, 10)
-        self.ready_label = QLabel("已就绪")
-        self.ready_label.setObjectName("logReadyBadge")
-        overlay_layout.addWidget(self.ready_dot)
-        overlay_layout.addWidget(self.ready_label)
+        self.status_control = KstStatusControl(self.ready_overlay)
+        overlay_layout.addWidget(self.status_control)
+        # Compatibility aliases for callers that still inspect the log badge.
+        self.ready_dot = self.status_control.kst_button
+        self.ready_label = self.status_control.live_label
         self.ready_overlay.adjustSize()
         self.setViewportMargins(0, 24, 0, 0)
 
@@ -2204,8 +2205,20 @@ class MainWindow(QMainWindow):
         log_font.setWeight(QFont.Weight.Normal)
         self.log_view.setFont(log_font)
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.kst_status_control = self.log_view.status_control
         self.log_ready_dot = self.log_view.ready_dot
         self.log_ready_badge = self.log_view.ready_label
+        try:
+            kst_source_mode = get_project_kst_data_source(
+                self.root,
+                "kunming_niu",
+            )
+        except Exception:
+            kst_source_mode = "export"
+        self.kst_status_control.set_source_mode(kst_source_mode)
+        self.kst_status_control.source_selected.connect(
+            self.on_kst_source_selected
+        )
         content_layout.addWidget(self.log_view, 1)
 
     def _apply_style(self) -> None:
@@ -3201,6 +3214,24 @@ class MainWindow(QMainWindow):
                 animate=False,
                 emit=False,
             )
+
+    def on_kst_source_selected(self, mode: str) -> None:
+        try:
+            set_project_kst_data_source(self.root, "kunming_niu", mode)
+        except Exception:
+            try:
+                previous = get_project_kst_data_source(
+                    self.root,
+                    "kunming_niu",
+                )
+            except Exception:
+                previous = "export"
+            self.kst_status_control.set_source_mode(previous)
+            self.append_log("[失败] 商务通来源设置未保存，已继续使用原设置")
+            return
+        label = "API 自动获取" if mode == "local_api" else "人工导出"
+        self.kst_status_control.set_source_mode(mode)
+        self.append_log(f"[设置] 商务通来源已切换为{label}")
 
     def set_excel_auto_open(self, enabled: bool) -> None:
         previous = self.open_excel_automatically
