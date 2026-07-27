@@ -85,6 +85,7 @@ class KstApiManager(QObject):
         self._worker: threading.Thread | None = None
         self._server: Any | None = None
         self._owns_server = False
+        self._external_server = False
         self._ready = False
         self._detail = "商务通 API 未启动"
         self._started = False
@@ -112,6 +113,7 @@ class KstApiManager(QObject):
             worker = self._worker
             self._server = None
             self._owns_server = False
+            self._external_server = False
             self._ready = False
             self._detail = "商务通 API 已停止"
         if server is not None:
@@ -148,7 +150,9 @@ class KstApiManager(QObject):
 
     def _ensure_service_async(self) -> None:
         with self._lock:
-            if self._stopping or self._ready:
+            if self._stopping:
+                return
+            if self._ready and self._owns_server:
                 return
             if self._worker is not None and self._worker.is_alive():
                 return
@@ -176,8 +180,14 @@ class KstApiManager(QObject):
                 or "http://127.0.0.1:18766"
             ).rstrip("/")
             parsed = urllib.parse.urlparse(url)
-            if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
-                raise ValueError("商务通本地 API 必须使用 127.0.0.1")
+            if (
+                parsed.scheme != "http"
+                or parsed.hostname != "127.0.0.1"
+                or parsed.port not in (None, 18766)
+            ):
+                raise ValueError(
+                    "商务通本地 API 必须使用 127.0.0.1:18766"
+                )
             port = parsed.port or 18766
             token_env = str(
                 kst_config.get("local_api_token_env")
@@ -186,9 +196,20 @@ class KstApiManager(QObject):
             token = os.environ.get(token_env, "")
             healthy, detail = self._probe_result(self._probe(url, token))
             if healthy:
-                self._publish(True, detail)
-                self.log_message.emit("已复用现有商务通本地 API")
+                with self._lock:
+                    already_external = (
+                        self._ready and self._external_server
+                    )
+                    self._external_server = True
+                if not already_external:
+                    self._publish(True, detail)
+                    self.log_message.emit("已复用现有商务通本地 API")
                 return
+            with self._lock:
+                lost_external = self._ready and self._external_server
+                self._external_server = False
+            if lost_external:
+                self._publish(False, "现有商务通本地 API 已断开，正在重启")
 
             today = date.today().isoformat()
             runtime = self._runtime_builder(
@@ -196,6 +217,16 @@ class KstApiManager(QObject):
                 today,
                 installation_root=kst_config.get("installation_root"),
             )
+            health = runtime.health()
+            if not (
+                health.get("status") == "ok"
+                and health.get("required_endpoints_available") is True
+            ):
+                self._publish(
+                    False,
+                    "商务通自动数据源尚未就绪，正在重试",
+                )
+                return
 
             def service_factory(request_date: str):
                 return self._runtime_builder(
@@ -217,6 +248,7 @@ class KstApiManager(QObject):
                     return
                 self._server = server
                 self._owns_server = True
+                self._external_server = False
             self._publish(True, f"商务通本地 API 已启动：127.0.0.1:{port}")
             self.log_message.emit("商务通本地 API 已随程序启动")
             server.serve_forever()
@@ -225,6 +257,8 @@ class KstApiManager(QObject):
                 if self._server is server:
                     self._server = None
                     self._owns_server = False
+                    self._external_server = False
+                    server.server_close()
             if unexpected_stop:
                 self._publish(False, "商务通本地 API 已停止，正在重试")
         except Exception:

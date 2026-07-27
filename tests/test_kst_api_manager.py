@@ -33,6 +33,16 @@ class FakeRuntime:
         }
 
 
+class NotReadyRuntime:
+    service = object()
+
+    def health(self):
+        return {
+            "status": "not_ready",
+            "required_endpoints_available": False,
+        }
+
+
 class FakeServer:
     def __init__(self):
         self.shutdown_calls = 0
@@ -116,4 +126,46 @@ def test_failed_start_stays_gray_and_retries(qapp, tmp_path):
 
     assert wait_until(lambda: len(attempts) >= 2)
     assert manager.is_ready() is False
+    manager.stop()
+
+
+def test_not_ready_runtime_never_turns_status_green(qapp, tmp_path):
+    factory_calls = []
+    manager = KstApiManager(
+        tmp_path,
+        project_loader=lambda *_: {
+            "project_id": "kunming_niu",
+            "kst": {"local_api_url": "http://127.0.0.1:18766"},
+        },
+        config_builder=lambda project, base: project,
+        runtime_builder=lambda *_args, **_kwargs: NotReadyRuntime(),
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: factory_calls.append(1),
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+
+    assert wait_until(lambda: "尚未就绪" in manager.status_detail())
+    assert manager.is_ready() is False
+    assert factory_calls == []
+    manager.stop()
+
+
+def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
+    server = FakeServer()
+    probe_results = iter([True, False])
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: next(probe_results, False),
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+
+    assert wait_until(manager.is_ready)
+    assert manager.owns_server() is False
+    assert wait_until(manager.owns_server)
+    assert manager.is_ready() is True
     manager.stop()

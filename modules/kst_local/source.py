@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from modules.kst_parser import empty_kst_accounts
 from modules.kst_local.runtime import write_hourly_report
-from modules.validators import get_required_accounts
+from modules.validators import get_required_accounts, validate_kst_report
 
 
 class KstLocalSourceError(RuntimeError):
@@ -147,6 +147,8 @@ def fetch_kst_local_report(
             raise KstLocalSourceError("商务通本地 API 返回校验错误")
         if not isinstance(payload.get("accounts"), dict):
             raise KstLocalSourceError("商务通本地 API 响应缺少账户统计")
+        if validate_kst_report(payload, get_required_accounts(config)):
+            raise KstLocalSourceError("商务通本地 API 响应账户统计不完整")
     except KstLocalSourceError:
         if not bool(kst_config.get("allow_zero_on_unavailable")):
             raise

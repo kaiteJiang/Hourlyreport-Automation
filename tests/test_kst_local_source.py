@@ -37,7 +37,16 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
             "date": "2026-07-27",
             "period": "15点",
             "source": "kst_local_api",
-            "accounts": {"银康01": {"总对话": 1}},
+            "accounts": {
+                account: {
+                    "总对话": 1 if account == "银康01" else 0,
+                    "有效对话": 0,
+                    "一般有效": 0,
+                    "有效转潜": 0,
+                    "总转潜": 0,
+                }
+                for account in ("银康01", "银康银屑02", "银康03")
+            },
             "summary": {"automatic_rows": 1},
             "errors": [],
         }
@@ -99,3 +108,22 @@ def test_api_unavailable_still_raises_without_opt_in(tmp_path):
             "15点",
             transport=lambda *_: (_ for _ in ()).throw(OSError("offline")),
         )
+
+
+def test_incomplete_api_accounts_use_zero_fallback_when_opted_in(tmp_path):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+
+    result = fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        transport=lambda *_: {
+            "source": "kst_local_api",
+            "accounts": {},
+            "errors": [],
+        },
+    )
+
+    assert result["dialog_data"]["source"] == "kst_local_api_unavailable_zero"
+    assert result["dialog_data"]["summary"]["api_unavailable"] is True

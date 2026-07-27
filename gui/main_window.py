@@ -4252,10 +4252,13 @@ def create_window(
     kst_api_manager_factory: Callable[..., KstApiManager] = KstApiManager,
 ) -> MainWindow:
     startup_kst_initialization = initialize_kst_directories_once()
-    window = MainWindow(
-        root,
-        kst_api_manager_factory=kst_api_manager_factory,
-    )
+    if kst_api_manager_factory is KstApiManager:
+        window = MainWindow(root)
+    else:
+        window = MainWindow(
+            root,
+            kst_api_manager_factory=kst_api_manager_factory,
+        )
     window.startup_kst_initialization = startup_kst_initialization
     window.show()
     window.start_update_check()

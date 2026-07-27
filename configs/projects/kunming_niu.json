@@ -15,7 +15,8 @@
     "installation_root": "D:\\Program Files (x86)\\KuaishangSoftx64\\OnlineWebCSNew",
     "identity": "733875_1269870",
     "local_api_url": "http://127.0.0.1:18766",
-    "local_api_token_env": "KST_LOCAL_API_TOKEN"
+    "local_api_token_env": "KST_LOCAL_API_TOKEN",
+    "allow_zero_on_unavailable": true
   },
   "baidu": {
     "credential_profile": "kunming_niu_baidu",
