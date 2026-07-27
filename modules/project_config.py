@@ -362,6 +362,17 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     kst["auto_pick_latest"] = project["kst"].get("auto_pick_latest", True)
     kst["max_file_age_minutes"] = project["kst"].get("max_file_age_minutes", 30)
     kst["max_file_age_hours"] = project["kst"].get("max_file_age_hours", 2)
+    for key in (
+        "data_source",
+        "installation_root",
+        "identity",
+        "local_api_url",
+        "local_api_token_env",
+        "local_api_timeout_seconds",
+    ):
+        if project["kst"].get(key) not in (None, ""):
+            kst[key] = project["kst"][key]
+    kst.setdefault("data_source", "export")
     kst["promotion_id_accounts"] = alias_maps["kst_id_to_account"]
     config["kst"] = kst
 
