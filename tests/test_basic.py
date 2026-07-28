@@ -11771,7 +11771,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.27.114"
+    assert CURRENT_VERSION == "2026.7.28.115"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
@@ -11779,13 +11779,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.27.115",
+        "tag_name": "v2026.7.28.116",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.27.115.zip",
+                "name": "Hourlyreport_automation_v2026.7.28.116.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11796,10 +11796,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.27.115"
+    assert update.version == "2026.7.28.116"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.27.115") is None
+    assert select_release_update(payload, "2026.7.28.116") is None
 
     for invalid in (
         {**payload, "draft": True},
