@@ -9363,6 +9363,39 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     assert not any(name.endswith(".lock") for name in names)
 
 
+def test_online_update_uses_only_staged_desktop_executable(tmp_path):
+    import zipfile
+
+    from tools.build_desktop_exe import write_build_manifest
+    from tools.build_release import build_release
+
+    root = tmp_path / "source"
+    (root / "gui").mkdir(parents=True)
+    (root / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.28.115"\n',
+        encoding="utf-8",
+    )
+    (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (root / "hourlyreport_automation.exe").write_bytes(b"stale-root-exe")
+    artifact_dir = root / "build" / "release_2026.7.28.115_staging"
+    artifact_dir.mkdir(parents=True)
+    staged = artifact_dir / "hourlyreport_automation.exe"
+    staged.write_bytes(b"fresh-staged-exe")
+    write_build_manifest(root, staged, "2026.7.28.115")
+
+    release = build_release(
+        root,
+        version="2026.7.28.115",
+        online_update=True,
+        artifact_dir=artifact_dir,
+        output_dir=tmp_path / "output",
+    )
+
+    with zipfile.ZipFile(release) as archive:
+        assert archive.namelist().count("hourlyreport_automation.exe") == 1
+        assert archive.read("hourlyreport_automation.exe") == b"fresh-staged-exe"
+
+
 def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     import zipfile
 
