@@ -11892,12 +11892,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.27.115",
+        "tag_name": "v2026.7.28.116",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.27.115.zip",
+                "name": "Hourlyreport_automation_v2026.7.28.116.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11925,7 +11925,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.27.115"]
+    assert [item.version for item in available] == ["2026.7.28.116"]
     assert ready == []
 
 
