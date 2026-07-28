@@ -78,7 +78,11 @@ def _required_endpoints_available(
         auth_date=target_date,
     )
     required = {"visitor_info", "visitor_card", "tag_dictionary"}
-    return required.issubset(snapshot.auth.endpoints)
+    return (
+        required.issubset(snapshot.auth.endpoints)
+        and bool(snapshot.auth.common_query)
+        and bool(snapshot.auth.headers)
+    )
 
 
 def _runtime_input_state(

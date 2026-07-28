@@ -36,6 +36,7 @@ class _SnapshotAccumulator:
         self.common_query: dict[str, Any] = {}
         self.headers: dict[str, str] = {}
         self.endpoints: dict[str, str] = {}
+        self.endpoint_seen_at: dict[str, str] = {}
         self.tag_dictionary: dict[str, str] = {}
 
     def consume(self, line: str) -> None:
@@ -81,11 +82,23 @@ class _SnapshotAccumulator:
                 if value is not None
             }
 
-        if auth_line:
-            for name, suffix in ENDPOINT_SUFFIXES.items():
-                endpoint = _find_endpoint(line, suffix)
-                if endpoint:
-                    self.endpoints[name] = endpoint
+        line_timestamp = (
+            line[1:20]
+            if len(line) >= 21
+            and line[0] == "["
+            and line[20] == "]"
+            else ""
+        )
+        for name, suffix in ENDPOINT_SUFFIXES.items():
+            endpoint = _find_endpoint(line, suffix)
+            previous_timestamp = self.endpoint_seen_at.get(name, "")
+            if endpoint and (
+                not previous_timestamp
+                or not line_timestamp
+                or line_timestamp >= previous_timestamp
+            ):
+                self.endpoints[name] = endpoint
+                self.endpoint_seen_at[name] = line_timestamp
 
         if auth_line and ENDPOINT_SUFFIXES["tag_dictionary"] in line:
             unescaped = line.replace(r"\"", '"')

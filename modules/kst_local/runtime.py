@@ -24,11 +24,16 @@ class KstLiveRuntime:
         auth = self.snapshot.auth.safe_diagnostics()
         required = {"visitor_info", "visitor_card", "tag_dictionary"}
         endpoints = set(auth["endpoint_names"])
+        required_endpoints_available = (
+            required.issubset(endpoints)
+            and bool(self.snapshot.auth.common_query)
+            and bool(self.snapshot.auth.headers)
+        )
         return {
-            "status": "ok" if required.issubset(endpoints) else "not_ready",
+            "status": "ok" if required_endpoints_available else "not_ready",
             "installation": self.installation.safe_diagnostics(),
             "automatic_sources": self.snapshot.safe_diagnostics(),
-            "required_endpoints_available": required.issubset(endpoints),
+            "required_endpoints_available": required_endpoints_available,
         }
 
 

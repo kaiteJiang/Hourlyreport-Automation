@@ -4,12 +4,17 @@ from pathlib import Path
 
 import pytest
 
+import modules.kst_local.identity_registry as registry_module
 from modules.kst_local.identity_registry import (
     KstIdentityMappingError,
     KstIdentityRegistry,
     build_project_promotion_index,
 )
-from modules.kst_local.models import KstInstallation
+from modules.kst_local.models import (
+    AutomaticSourceSnapshot,
+    KstAuthContext,
+    KstInstallation,
+)
 
 
 def project(project_id, promotion_ids):
@@ -47,6 +52,46 @@ def installation(tmp_path: Path, identity: str) -> KstInstallation:
         database_paths=(tmp_path / "db" / identity / "VISITOR.db",),
         sqlite_module_dir=root / "resources" / "app" / "node_modules" / "sqlite",
     )
+
+
+@pytest.mark.parametrize(
+    ("common_query", "headers", "expected"),
+    [
+        ({}, {"X-Client": "desktop"}, False),
+        ({"compId": "1"}, {}, False),
+        ({"compId": "1"}, {"X-Client": "desktop"}, True),
+    ],
+)
+def test_required_endpoints_also_require_current_auth(
+    monkeypatch,
+    tmp_path,
+    common_query,
+    headers,
+    expected,
+):
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={},
+        auth=KstAuthContext(
+            common_query=common_query,
+            headers=headers,
+            endpoints={
+                "visitor_info": "https://example/visitor",
+                "visitor_card": "https://example/card",
+                "tag_dictionary": "https://example/tags",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "parse_cached_log_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+    item = installation(tmp_path, "id-a")
+
+    assert registry_module._required_endpoints_available(
+        item,
+        "2026-07-28",
+    ) is expected
 
 
 def registry_for(

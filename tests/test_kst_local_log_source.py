@@ -223,35 +223,58 @@ def test_log_snapshot_recovers_cached_tag_dictionary(tmp_path: Path):
     }
 
 
-def test_auth_date_excludes_historical_identity_endpoints(tmp_path: Path):
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-    (log_dir / "app.log").write_text(
+def test_snapshot_reuses_historical_endpoint_urls_but_not_historical_auth(
+    tmp_path: Path,
+):
+    log = tmp_path / "app.log"
+    log.write_text(
         "\n".join(
             [
-                (
-                    "[2020-01-01 09:00:00] request "
-                    "https://old.example/OnlineHd/visitorInfo/load"
-                ),
-                (
-                    "[2020-01-01 09:00:01] request "
-                    "https://old.example/OnlineCore/nv2012/func/"
-                    "ocVisitorCard/detail.do"
-                ),
-                (
-                    "[2020-01-01 09:00:02] request "
-                    "https://old.example/OnlineCore/nv/visitorCard/"
-                    "custTypeQuery.do"
-                ),
+                '[2026-07-27 09:00:00] [Api] GlobalCommonParams {"query":{"old":"1"}}',
+                '[2026-07-27 09:00:00] [Api] GlobalCommonHeaders {"clientToken":"old"}',
+                "[2026-07-27 09:00:00] post https://old.example/OnlineHd/visitorInfo/load",
+                "[2026-07-27 09:00:01] post https://old.example/OnlineCore/nv2012/func/ocVisitorCard/detail.do",
+                "[2026-07-27 09:00:02] post https://old.example/OnlineCore/nv/visitorCard/custTypeQuery.do",
+                '[2026-07-28 09:00:00] [Api] GlobalCommonParams {"query":{"today":"1"}}',
+                '[2026-07-28 09:00:00] [Api] GlobalCommonHeaders {"clientToken":"today"}',
             ]
         ),
         encoding="utf-8",
     )
 
     snapshot = parse_log_snapshot(
-        log_dir,
-        "2026-07-27",
-        auth_date="2026-07-27",
+        tmp_path,
+        "2026-07-28",
+        auth_date="2026-07-28",
     )
 
-    assert snapshot.auth.endpoints == {}
+    assert snapshot.auth.common_query == {"today": "1"}
+    assert snapshot.auth.headers == {"clientToken": "today"}
+    assert set(snapshot.auth.endpoints) >= {
+        "visitor_info",
+        "visitor_card",
+        "tag_dictionary",
+    }
+
+
+def test_current_endpoint_url_overrides_historical_url(tmp_path: Path):
+    log = tmp_path / "app.log"
+    log.write_text(
+        "\n".join(
+            [
+                "[2026-07-28 09:00:00] post https://new.example/OnlineHd/visitorInfo/load",
+                "[2026-07-27 09:00:00] post https://old.example/OnlineHd/visitorInfo/load",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(
+        tmp_path,
+        "2026-07-28",
+        auth_date="2026-07-28",
+    )
+
+    assert snapshot.auth.endpoints["visitor_info"].startswith(
+        "https://new.example/"
+    )
