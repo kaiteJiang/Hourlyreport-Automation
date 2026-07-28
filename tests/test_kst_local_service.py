@@ -265,24 +265,68 @@ def test_service_preserves_visitor_then_card_order_per_conversation():
 
 
 def test_parallel_failure_does_not_cache_partial_results():
-    client = FakeClient(failing_rec_id="101")
-    service = KstConversationService(
+    successful_conversation_loaded = threading.Event()
+
+    class CoordinatedService(KstConversationService):
+        def _load_conversation(
+            self,
+            candidate,
+            tag_map,
+            allowed,
+            promotion_map,
+        ):
+            if candidate.rec_id == "202":
+                if not successful_conversation_loaded.wait(timeout=1):
+                    raise AssertionError(
+                        "failing conversation ran before successful conversation"
+                    )
+            conversation = super()._load_conversation(
+                candidate,
+                tag_map,
+                allowed,
+                promotion_map,
+            )
+            if candidate.rec_id == "101":
+                successful_conversation_loaded.set()
+            return conversation
+
+    candidates = [
+        KstCacheCandidate(
+            rec_id="101",
+            start_time="2026-07-27 08:59:58",
+            promotion_id="72828178",
+            visitor_messages=1,
+        ),
+        KstCacheCandidate(
+            rec_id="202",
+            start_time="2026-07-27 09:00:00",
+            promotion_id="72828179",
+            visitor_messages=1,
+        ),
+    ]
+    client = FakeClient(failing_rec_id="202")
+    service = CoordinatedService(
         config=_config(),
         snapshot=_snapshot(),
-        candidates=_candidates(),
+        candidates=candidates,
         client=client,
     )
 
     with pytest.raises(KstServiceError):
         service.collect("2026-07-27")
-    first_call_count = len(client.visitor_calls)
 
+    assert successful_conversation_loaded.is_set()
     assert "2026-07-27" not in service._cache
+    assert client.visitor_calls.count("101") == 1
+    assert client.visitor_calls.count("202") == 1
 
+    successful_conversation_loaded.clear()
     with pytest.raises(KstServiceError):
         service.collect("2026-07-27")
 
-    assert len(client.visitor_calls) > first_call_count
+    assert successful_conversation_loaded.is_set()
+    assert client.visitor_calls.count("101") == 2
+    assert client.visitor_calls.count("202") == 2
 
 
 def test_service_collect_is_single_flight_for_shared_runtime():
