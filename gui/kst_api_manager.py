@@ -76,7 +76,7 @@ class KstApiManager(QObject):
         probe: Probe = probe_kst_health,
         server_factory: Callable[..., Any] = create_server,
         registry_factory: Callable[[Path], Any] = KstIdentityRegistry,
-        retry_interval_ms: int = 15_000,
+        retry_interval_ms: int = 5_000,
         registry_refresh_interval_ms: int = 300_000,
         monotonic: Callable[[], float] = time.monotonic,
         parent: QObject | None = None,

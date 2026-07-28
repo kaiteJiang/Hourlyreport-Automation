@@ -82,6 +82,17 @@ def _manager(tmp_path, **kwargs):
     )
 
 
+def test_manager_default_retry_interval_is_five_seconds(qapp, tmp_path):
+    manager = KstApiManager(
+        tmp_path,
+        registry_factory=FakeRegistry,
+        probe=lambda *_: False,
+    )
+
+    assert manager._retry_timer.interval() == 5_000
+    manager.stop()
+
+
 def test_manager_starts_owned_server_and_stops_it(qapp, tmp_path):
     server = FakeServer()
     manager = _manager(
