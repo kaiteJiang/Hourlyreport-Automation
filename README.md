@@ -115,8 +115,8 @@ Hourlyreport_automation_setup_v2026.7.28.115.exe
 <details open>
 <summary><strong>GUI 日常操作</strong></summary>
 
-1. 双击 `hourlyreport_automation.exe`，选择单项目或最多 3 个多项目。
-2. 选择数据模式：`A > B` 为 API 优先，`B > A` 为强制浏览器。
+1. 双击 `hourlyreport_automation.exe`，选择单项目，或切换多项目并按顺序选择 1–3 个项目。
+2. 选择数据模式：单项目可用 `A > B`（API 优先）或 `B > A`（强制浏览器）；多项目固定为 API-only，不提供 `B > A` 或浏览器降级。
 3. 小时报选择 11 点、15 点或 18 点；日报使用昨天或指定日期。
 4. 启动任务，查看“当前流程”和“实时日志”。
 5. 完成后核对结果汇总，并按系统设置打开目标 Excel。
@@ -148,7 +148,7 @@ run_hermes_daily.bat
 | Excel | 写前备份、动态定位、写后复核；结构不确定立即停止 |
 | 凭据 | `secretKey` 仅在 SCF；桌面端只保存独立 HMAC 客户端密钥与 OAuth Token，密码和密钥不进日志、发布包或 Git |
 | 浏览器 | 默认只连接 Chrome CDP `http://127.0.0.1:9222`，不静默切 Edge |
-| 失败处理 | 百度和浏览器均失败则停止；快商通不完整则该项目快商通指标按 0，不拼接部分数据 |
+| 失败处理 | 单项目百度 API 与浏览器均失败则停止；多项目 API 失败只跳过当前项目并汇总；快商通不完整则该项目快商通指标按 0，不拼接部分数据 |
 
 Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总区、截图区、非目标区域或用户模板样式；目标位置必须通过表头、账户区域和字段名称识别。写入后会回读复核并恢复筛选、保护等 UI 元数据。无法确认结构时，流程会停止并输出诊断信息。
 
@@ -213,7 +213,7 @@ GUI、HERMES 和 CLI 共享应用级配置 `baidu_data_source_preference`，缺�
 
 - 每次选择 1–3 个项目；重复项目或重复 Excel 路径必须在发起 API 前拒绝。
 - 只并行准备各项目百度 API 数据；快商通解析、合并和 Excel 写入按选择顺序串行。
-- 多项目模式不启动浏览器，也不从 API 降级浏览器。单项目 API 失败时跳过该项目，其他项目继续，并在 `reports/multi_project_run_report.json` 汇总。
+- 多项目模式固定为 API-only，不启动浏览器，也不从 API 降级浏览器。其中一个项目 API 失败时只跳过该项目，其他项目继续，并在 `reports/multi_project_run_report.json` 汇总。
 - 停止请求不会中断当前项目，只从下一个排队项目开始停止；成功项目完成后可依次打开 Excel。
 </details>
 
