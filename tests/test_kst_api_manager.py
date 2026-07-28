@@ -56,10 +56,12 @@ class FakeServer:
     def __init__(self):
         self.shutdown_calls = 0
         self.close_calls = 0
+        self.started = threading.Event()
         self._stopped = threading.Event()
 
     def serve_forever(self):
-        self._stopped.wait(2)
+        self.started.set()
+        self._stopped.wait()
 
     def shutdown(self):
         self.shutdown_calls += 1
@@ -71,7 +73,23 @@ class FakeServer:
 
 class ExplodingServer(FakeServer):
     def serve_forever(self):
+        self.started.set()
         raise OSError("listener failed")
+
+
+def test_fake_server_waits_for_shutdown_without_timeout():
+    server = FakeServer()
+    wait_timeouts = []
+
+    class RecordingStopEvent:
+        def wait(self, timeout=None):
+            wait_timeouts.append(timeout)
+
+    server._stopped = RecordingStopEvent()
+
+    server.serve_forever()
+
+    assert wait_timeouts == [None]
 
 
 def _manager(tmp_path, **kwargs):
@@ -103,10 +121,12 @@ def test_manager_starts_owned_server_and_stops_it(qapp, tmp_path):
     )
 
     manager.start()
-
-    assert wait_until(manager.is_ready)
-    assert manager.owns_server() is True
-    manager.stop()
+    try:
+        assert wait_until(server.started.is_set)
+        assert manager.is_ready() is True
+        assert manager.owns_server() is True
+    finally:
+        manager.stop()
     assert server.shutdown_calls == 1
     assert server.close_calls == 1
 
@@ -120,9 +140,10 @@ def test_manager_reuses_external_server_without_stopping_it(qapp, tmp_path):
     )
 
     manager.start()
-
-    assert wait_until(manager.is_ready)
-    manager.stop()
+    try:
+        assert wait_until(manager.is_ready)
+    finally:
+        manager.stop()
     assert manager.owns_server() is False
     assert factory_calls == []
 
@@ -140,10 +161,11 @@ def test_failed_start_stays_gray_and_retries(qapp, tmp_path):
     )
 
     manager.start()
-
-    assert wait_until(lambda: len(attempts) >= 2)
-    assert manager.is_ready() is False
-    manager.stop()
+    try:
+        assert wait_until(lambda: len(attempts) >= 2)
+        assert manager.is_ready() is False
+    finally:
+        manager.stop()
 
 
 def test_not_ready_runtime_never_turns_status_green(qapp, tmp_path):
@@ -157,11 +179,12 @@ def test_not_ready_runtime_never_turns_status_green(qapp, tmp_path):
     )
 
     manager.start()
-
-    assert wait_until(lambda: "尚未就绪" in manager.status_detail())
-    assert manager.is_ready() is False
-    assert factory_calls == []
-    manager.stop()
+    try:
+        assert wait_until(lambda: "尚未就绪" in manager.status_detail())
+        assert manager.is_ready() is False
+        assert factory_calls == []
+    finally:
+        manager.stop()
 
 
 def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
@@ -175,12 +198,14 @@ def test_external_server_loss_starts_owned_replacement(qapp, tmp_path):
     )
 
     manager.start()
-
-    assert wait_until(manager.is_ready)
-    assert manager.owns_server() is False
-    assert wait_until(manager.owns_server)
-    assert manager.is_ready() is True
-    manager.stop()
+    try:
+        assert wait_until(manager.is_ready)
+        assert manager.owns_server() is False
+        assert wait_until(server.started.is_set)
+        assert manager.owns_server() is True
+        assert manager.is_ready() is True
+    finally:
+        manager.stop()
 
 
 def test_healthy_owned_server_skips_full_refresh_before_interval(qapp, tmp_path):
@@ -204,17 +229,19 @@ def test_healthy_owned_server_skips_full_refresh_before_interval(qapp, tmp_path)
     )
 
     manager.start()
-
-    assert wait_until(manager.is_ready)
-    deadline = time.monotonic() + 0.08
-    while time.monotonic() < deadline:
-        QApplication.processEvents()
-        time.sleep(0.01)
-    assert len(registries) == 1
-    assert registries[0].refresh_calls == 1
-    now[0] += 301
-    assert wait_until(lambda: registries[0].refresh_calls == 2)
-    manager.stop()
+    try:
+        assert wait_until(server.started.is_set)
+        assert manager.is_ready() is True
+        deadline = time.monotonic() + 0.08
+        while time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert len(registries) == 1
+        assert registries[0].refresh_calls == 1
+        now[0] += 301
+        assert wait_until(lambda: registries[0].refresh_calls == 2)
+    finally:
+        manager.stop()
 
 
 def test_owned_server_exception_clears_ready_and_ownership(qapp, tmp_path):
@@ -227,8 +254,44 @@ def test_owned_server_exception_clears_ready_and_ownership(qapp, tmp_path):
     )
 
     manager.start()
+    try:
+        assert wait_until(server.started.is_set)
+        assert wait_until(lambda: server.close_calls == 1)
+        assert manager.is_ready() is False
+        assert manager.owns_server() is False
+    finally:
+        manager.stop()
 
-    assert wait_until(lambda: server.close_calls == 1)
-    assert manager.is_ready() is False
-    assert manager.owns_server() is False
-    manager.stop()
+
+def test_unexpected_server_exit_uses_fresh_instances_and_restarts(
+    qapp,
+    tmp_path,
+):
+    servers = []
+
+    def server_factory(*_args, **_kwargs):
+        server = ExplodingServer() if len(servers) < 2 else FakeServer()
+        servers.append(server)
+        return server
+
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: False,
+        server_factory=server_factory,
+        retry_interval_ms=20,
+    )
+
+    manager.start()
+    try:
+        assert wait_until(
+            lambda: len(servers) >= 3 and servers[2].started.is_set()
+        )
+        assert servers[0] is not servers[1]
+        assert [server.close_calls for server in servers[:2]] == [1, 1]
+        assert manager.owns_server() is True
+        assert manager.is_ready() is True
+    finally:
+        manager.stop()
+
+    assert [server.close_calls for server in servers] == [1, 1, 1]
+    assert servers[2].shutdown_calls == 1

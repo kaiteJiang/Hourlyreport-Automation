@@ -754,3 +754,44 @@ git commit -m "docs: explain KST performance safeguards"
 - 全量测试输出为绿色；
 - 没有执行真实日报或写 Excel；
 - 用户原有配置脏文件未进入提交。
+
+---
+
+### Task 5: 稳定 KST 管理器测试生命周期
+
+**Files:**
+- Modify: `tests/test_kst_api_manager.py`
+
+**Interfaces:**
+- Test only: 正常假服务器持续运行到 `shutdown()`；意外退出时每轮使用独立实例。
+- Production: `gui/kst_api_manager.py` 不变。
+
+- [ ] **Step 1: 修正正常假服务器语义**
+
+让 `FakeServer.serve_forever()` 等待 `shutdown()`，不再固定 2 秒自行退出；
+增加服务已启动事件，并让测试显式等待该事件。测试使用 `try/finally` 保证
+`manager.stop()` 一定执行。
+
+- [ ] **Step 2: 增加意外退出回归测试**
+
+使用每轮独立的新假服务器实例模拟 `serve_forever()` 意外退出，验证每个实例
+只关闭一次，并确认管理器能够发起下一轮启动。不得复用同一个假服务器制造不符合
+真实 `ThreadingHTTPServer` 生命周期的断言。
+
+- [ ] **Step 3: 运行定向与完整验证**
+
+Run:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests\test_kst_api_manager.py -q
+.venv\Scripts\python.exe -m pytest -q
+```
+
+Expected: 全部通过。若完整测试仍失败，记录准确时序，不通过提高 timeout 掩盖。
+
+- [ ] **Step 4: 提交测试稳定性修复**
+
+```powershell
+git add tests/test_kst_api_manager.py docs/superpowers/plans/2026-07-28-kst-api-startup-and-daily-performance.md
+git commit -m "test: isolate KST manager server lifecycle"
+```
