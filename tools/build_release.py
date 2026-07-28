@@ -107,6 +107,11 @@ def should_include_file(
         and path.name.casefold() == DESKTOP_EXE.casefold()
     ):
         return False
+    if (
+        (internal or online_update or first_install)
+        and ".worktrees" in parts
+    ):
+        return False
     if first_install and path.as_posix() in {
         "configs/current_project.json",
         "configs/multi_project_selection.json",

@@ -9396,6 +9396,45 @@ def test_online_update_uses_only_staged_desktop_executable(tmp_path):
         assert archive.read("hourlyreport_automation.exe") == b"fresh-staged-exe"
 
 
+def test_online_update_excludes_nested_development_worktrees(tmp_path):
+    import zipfile
+
+    from tools.build_desktop_exe import write_build_manifest
+
+    root = tmp_path / "source"
+    (root / "gui").mkdir(parents=True)
+    (root / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.28.115"\n',
+        encoding="utf-8",
+    )
+    (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    nested_worktree = root / ".worktrees" / "review-copy"
+    nested_worktree.mkdir(parents=True)
+    (nested_worktree / "must-not-ship.txt").write_text(
+        "development-only",
+        encoding="utf-8",
+    )
+    artifact_dir = root / "build" / "release_2026.7.28.115_staging"
+    artifact_dir.mkdir(parents=True)
+    executable = artifact_dir / "hourlyreport_automation.exe"
+    executable.write_bytes(b"fresh-staged-exe")
+    write_build_manifest(root, executable, "2026.7.28.115")
+
+    release = build_release(
+        root,
+        version="2026.7.28.115",
+        online_update=True,
+        artifact_dir=artifact_dir,
+        output_dir=tmp_path / "output",
+    )
+
+    with zipfile.ZipFile(release) as archive:
+        assert not any(
+            name.startswith(".worktrees/")
+            for name in archive.namelist()
+        )
+
+
 def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     import zipfile
 
