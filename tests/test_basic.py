@@ -9435,6 +9435,54 @@ def test_online_update_excludes_nested_development_worktrees(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    "release_flags",
+    [
+        {"internal": True},
+        {"online_update": True},
+        {"first_install": True},
+    ],
+    ids=["internal", "online-update", "first-install"],
+)
+@pytest.mark.parametrize(
+    "worktree_path",
+    [
+        Path(".worktrees") / "marker.txt",
+        Path("nested") / ".worktrees" / "marker.txt",
+    ],
+    ids=["root", "nested"],
+)
+def test_program_release_filters_only_exact_worktree_directories(
+    release_flags,
+    worktree_path,
+):
+    assert should_include_file(worktree_path, **release_flags) is False
+    assert should_include_file(
+        Path("nested") / ".worktrees-backup" / "marker.txt",
+        **release_flags,
+    ) is True
+
+
+def test_source_only_build_keeps_development_worktree_content(tmp_path):
+    import zipfile
+
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    worktree_marker = root / ".worktrees" / "marker.txt"
+    worktree_marker.parent.mkdir()
+    worktree_marker.write_text("source-only", encoding="utf-8")
+
+    release = build_release(
+        root,
+        version="source-only",
+        output_dir=tmp_path / "output",
+    )
+
+    with zipfile.ZipFile(release) as archive:
+        assert ".worktrees/marker.txt" in archive.namelist()
+
+
 def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     import zipfile
 
