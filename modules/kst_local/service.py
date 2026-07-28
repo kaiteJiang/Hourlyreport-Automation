@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Any
 
@@ -50,11 +51,13 @@ class KstConversationService:
         snapshot: AutomaticSourceSnapshot,
         candidates: list[KstCacheCandidate],
         client: KstApiClient,
+        max_workers: int = 4,
     ) -> None:
         self._config = config
         self._snapshot = snapshot
         self._candidates = candidates
         self._client = client
+        self._max_workers = max(1, min(4, int(max_workers)))
         self._cache_lock = threading.RLock()
         self._cache: dict[str, tuple[KstConversation, ...]] = {}
 
@@ -80,55 +83,79 @@ class KstConversationService:
         )
         if not isinstance(promotion_map, dict) or not promotion_map:
             raise KstServiceError("项目缺少商务通推广 ID 映射")
-        conversations: list[KstConversation] = []
-        for candidate in selected:
-            try:
-                visitor = self._client.load_visitor(candidate.rec_id)
-                visitor_id = str(visitor.get("visitorId") or "")
-                if not visitor_id:
-                    raise ValueError("visitorId missing")
-                card = self._client.load_card(visitor_id)
-                start_time = str(
-                    visitor.get("curEnterTime")
-                    or visitor.get("dialogOpenTime")
-                    or ""
+        if not selected:
+            self._cache[target_date] = ()
+            return []
+        worker_count = min(self._max_workers, max(1, len(selected)))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            conversations = list(
+                executor.map(
+                    lambda candidate: self._load_conversation(
+                        candidate,
+                        tag_map,
+                        allowed,
+                        promotion_map,
+                    ),
+                    selected,
                 )
-                if not start_time:
-                    raise ValueError("curEnterTime missing")
-                visitor_messages = int(
-                    visitor.get("visitorSendNum", visitor.get("vsSendNum", 0)) or 0
-                )
-                promotion_id = (
-                    _promotion_id(visitor.get("visitorCustomField"))
-                    or candidate.promotion_id
-                )
-                if not promotion_id:
-                    raise ValueError("promotion id missing")
-                if promotion_id not in promotion_map:
-                    raise ValueError("promotion id outside project mapping")
-                tags = tuple(
-                    tag_map.get(tag_id, tag_id)
-                    for tag_id in _tag_ids(card.get("cusTypeTag"))
-                )
-                conversations.append(
-                    KstConversation(
-                        rec_id=candidate.rec_id,
-                        start_time=start_time,
-                        promotion_id=promotion_id,
-                        visitor_messages=visitor_messages,
-                        tags=tags,
-                        sources=allowed[candidate.rec_id],
-                        keyword=candidate.keyword,
-                        bid_word=candidate.bid_word,
-                    )
-                )
-            except Exception as exc:
-                raise KstServiceError(
-                    f"自动来源会话查询失败：recId={candidate.rec_id}"
-                ) from None
+            )
         conversations.sort(key=lambda item: (item.start_time, item.rec_id))
         self._cache[target_date] = tuple(conversations)
         return conversations
+
+    def _load_conversation(
+        self,
+        candidate: KstCacheCandidate,
+        tag_map: dict[str, str],
+        allowed: dict[str, frozenset[str]],
+        promotion_map: dict[str, str],
+    ) -> KstConversation:
+        try:
+            visitor = self._client.load_visitor(candidate.rec_id)
+            visitor_id = str(visitor.get("visitorId") or "")
+            if not visitor_id:
+                raise ValueError("visitorId missing")
+            card = self._client.load_card(visitor_id)
+            start_time = str(
+                visitor.get("curEnterTime")
+                or visitor.get("dialogOpenTime")
+                or ""
+            )
+            if not start_time:
+                raise ValueError("curEnterTime missing")
+            visitor_messages = int(
+                visitor.get(
+                    "visitorSendNum",
+                    visitor.get("vsSendNum", 0),
+                )
+                or 0
+            )
+            promotion_id = (
+                _promotion_id(visitor.get("visitorCustomField"))
+                or candidate.promotion_id
+            )
+            if not promotion_id:
+                raise ValueError("promotion id missing")
+            if promotion_id not in promotion_map:
+                raise ValueError("promotion id outside project mapping")
+            tags = tuple(
+                tag_map.get(tag_id, tag_id)
+                for tag_id in _tag_ids(card.get("cusTypeTag"))
+            )
+            return KstConversation(
+                rec_id=candidate.rec_id,
+                start_time=start_time,
+                promotion_id=promotion_id,
+                visitor_messages=visitor_messages,
+                tags=tags,
+                sources=allowed[candidate.rec_id],
+                keyword=candidate.keyword,
+                bid_word=candidate.bid_word,
+            )
+        except Exception:
+            raise KstServiceError(
+                f"自动来源会话查询失败：recId={candidate.rec_id}"
+            ) from None
 
     @staticmethod
     def _row(conversation: KstConversation) -> dict[str, Any]:

@@ -179,6 +179,112 @@ def test_service_rejects_automatic_conversation_outside_project_mapping():
         service.collect("2026-07-27")
 
 
+def test_service_loads_different_conversations_with_bounded_parallelism():
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    class ParallelClient(FakeClient):
+        def load_visitor(self, rec_id):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if peak >= 4:
+                    release.set()
+            release.wait(timeout=1)
+            with lock:
+                active -= 1
+            return {
+                "visitorId": f"visitor-{rec_id}",
+                "curEnterTime": "2026-07-27 09:00:00",
+                "visitorSendNum": 2,
+            }
+
+    rec_ids = [str(100 + index) for index in range(8)]
+    snapshot_with_eight_allowed_ids = AutomaticSourceSnapshot(
+        sources_by_rec_id={
+            rec_id: frozenset({"websocket_msg_type_48"})
+            for rec_id in rec_ids
+        },
+        auth=KstAuthContext(),
+    )
+    eight_candidates = [
+        KstCacheCandidate(
+            rec_id=rec_id,
+            start_time="2026-07-27 09:00:00",
+            promotion_id="72828178",
+            visitor_messages=2,
+        )
+        for rec_id in rec_ids
+    ]
+    service = KstConversationService(
+        config=_config(),
+        snapshot=snapshot_with_eight_allowed_ids,
+        candidates=eight_candidates,
+        client=ParallelClient(),
+    )
+
+    conversations = service.collect("2026-07-27")
+
+    assert len(conversations) == 8
+    assert peak == 4
+
+
+def test_service_preserves_visitor_then_card_order_per_conversation():
+    calls = []
+    lock = threading.Lock()
+
+    class OrderedClient(FakeClient):
+        def load_visitor(self, rec_id):
+            with lock:
+                calls.append(("visitor", rec_id))
+            return {
+                "visitorId": f"visitor-{rec_id}",
+                "curEnterTime": "2026-07-27 09:00:00",
+                "visitorSendNum": 2,
+            }
+
+        def load_card(self, visitor_id):
+            rec_id = visitor_id.removeprefix("visitor-")
+            with lock:
+                calls.append(("card", rec_id))
+            return {"cusTypeTag": '{"11":1}'}
+
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=_candidates(),
+        client=OrderedClient(),
+    )
+
+    service.collect("2026-07-27")
+
+    assert calls.index(("visitor", "101")) < calls.index(("card", "101"))
+
+
+def test_parallel_failure_does_not_cache_partial_results():
+    client = FakeClient(failing_rec_id="101")
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=_candidates(),
+        client=client,
+    )
+
+    with pytest.raises(KstServiceError):
+        service.collect("2026-07-27")
+    first_call_count = len(client.visitor_calls)
+
+    assert "2026-07-27" not in service._cache
+
+    with pytest.raises(KstServiceError):
+        service.collect("2026-07-27")
+
+    assert len(client.visitor_calls) > first_call_count
+
+
 def test_service_collect_is_single_flight_for_shared_runtime():
     started = threading.Event()
     release = threading.Event()
