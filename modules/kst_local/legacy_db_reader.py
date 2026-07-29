@@ -81,25 +81,28 @@ def _check_interrupted(cancel_event: Any, deadline: float) -> None:
 
 
 def _validate_target_date(value: str) -> str:
+    parsed: date | None = None
     try:
         parsed = date.fromisoformat(str(value))
-    except (TypeError, ValueError) as exc:
-        raise KstLegacyDatabaseError("老版快商通目标日期无效") from exc
-    normalized = parsed.isoformat()
-    if normalized != value:
-        raise KstLegacyDatabaseError("老版快商通目标日期无效")
-    return normalized
+    except (TypeError, ValueError):
+        pass
+    if parsed is not None:
+        normalized = parsed.isoformat()
+        if normalized == value:
+            return normalized
+    raise KstLegacyDatabaseError("老版快商通目标日期无效") from None
 
 
 def _validate_start_time(cur_enter_time: Any, dialog_start_time: Any) -> str:
     value = str(cur_enter_time or dialog_start_time or "").strip()
+    parsed: datetime | None = None
     try:
-        datetime.fromisoformat(value)
-    except (TypeError, ValueError) as exc:
-        raise KstLegacyDatabaseError("老版快商通会话时间无效") from exc
-    if _DATETIME_PATTERN.match(value) is None:
-        raise KstLegacyDatabaseError("老版快商通会话时间无效")
-    return value
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        pass
+    if parsed is not None and _DATETIME_PATTERN.match(value) is not None:
+        return value
+    raise KstLegacyDatabaseError("老版快商通会话时间无效") from None
 
 
 def _validate_visitor_messages(value: Any) -> int:
@@ -108,10 +111,14 @@ def _validate_visitor_messages(value: Any) -> int:
     text = str(value).strip()
     if _INTEGER_PATTERN.fullmatch(text) is None:
         raise KstLegacyDatabaseError("老版快商通访客消息数无效")
-    messages = int(text)
-    if messages < 0:
-        raise KstLegacyDatabaseError("老版快商通访客消息数无效")
-    return messages
+    messages: int | None = None
+    try:
+        messages = int(text)
+    except ValueError:
+        pass
+    if messages is not None and messages >= 0:
+        return messages
+    raise KstLegacyDatabaseError("老版快商通访客消息数无效") from None
 
 
 def _install_progress_handler(
@@ -137,6 +144,7 @@ def _read_authorized_rec_ids(
     rec_ids: set[str] = set()
     for database_path in installation.message_database_paths:
         _check_interrupted(cancel_event, deadline)
+        database_error = False
         try:
             with closing(_connect_read_only(database_path)) as connection:
                 _install_progress_handler(connection, cancel_event, deadline)
@@ -156,11 +164,13 @@ def _read_authorized_rec_ids(
                 _check_interrupted(cancel_event, deadline)
         except KstLegacyDatabaseError:
             raise
-        except sqlite3.Error as exc:
+        except (OSError, sqlite3.Error, ValueError):
+            database_error = True
+        if database_error:
             _check_interrupted(cancel_event, deadline)
             raise KstLegacyDatabaseError(
                 "老版快商通实时会话数据库读取失败"
-            ) from exc
+            ) from None
     return rec_ids
 
 
@@ -172,6 +182,7 @@ def _read_all_authorized_rec_ids(
     rec_ids: set[str] = set()
     for database_path in installation.message_database_paths:
         _check_interrupted(cancel_event, deadline)
+        database_error = False
         try:
             with closing(_connect_read_only(database_path)) as connection:
                 _install_progress_handler(connection, cancel_event, deadline)
@@ -189,11 +200,13 @@ def _read_all_authorized_rec_ids(
                 _check_interrupted(cancel_event, deadline)
         except KstLegacyDatabaseError:
             raise
-        except sqlite3.Error as exc:
+        except (OSError, sqlite3.Error, ValueError):
+            database_error = True
+        if database_error:
             _check_interrupted(cancel_event, deadline)
             raise KstLegacyDatabaseError(
                 "老版快商通实时会话数据库读取失败"
-            ) from exc
+            ) from None
     return rec_ids
 
 
@@ -205,6 +218,7 @@ def _read_history_rows(
 ) -> dict[str, tuple[Any, ...]]:
     rows_by_rec_id: dict[str, tuple[Any, ...]] = {}
     ordered_rec_ids = sorted(rec_ids)
+    database_error = False
     try:
         with closing(_connect_read_only(installation.history_db)) as connection:
             _install_progress_handler(connection, cancel_event, deadline)
@@ -226,15 +240,21 @@ def _read_history_rows(
                 for row in rows:
                     rec_id = str(row[0] or "").strip()
                     if rec_id:
+                        if rec_id in rows_by_rec_id:
+                            raise KstLegacyDatabaseError(
+                                "老版快商通历史会话记录重复"
+                            )
                         rows_by_rec_id[rec_id] = tuple(row)
                 _check_interrupted(cancel_event, deadline)
     except KstLegacyDatabaseError:
         raise
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error, ValueError):
+        database_error = True
+    if database_error:
         _check_interrupted(cancel_event, deadline)
         raise KstLegacyDatabaseError(
             "老版快商通历史会话数据库读取失败"
-        ) from exc
+        ) from None
     return rows_by_rec_id
 
 
@@ -251,6 +271,7 @@ def read_legacy_promotion_ids(
         deadline,
     )
     if not authorized:
+        _check_interrupted(cancel_event, deadline)
         return set()
     history_rows = _read_history_rows(
         installation,
@@ -261,10 +282,14 @@ def read_legacy_promotion_ids(
     if set(history_rows) != authorized:
         raise KstLegacyDatabaseError("老版快商通会话尚未同步完整")
     promotion_ids: set[str] = set()
+    _check_interrupted(cancel_event, deadline)
     for row in history_rows.values():
+        _check_interrupted(cancel_event, deadline)
         match = _PROMOTION_PATTERN.search(str(row[4] or ""))
         if match is not None:
             promotion_ids.add(match.group(1))
+        _check_interrupted(cancel_event, deadline)
+    _check_interrupted(cancel_event, deadline)
     return promotion_ids
 
 
@@ -284,6 +309,7 @@ def read_legacy_conversations(
         deadline,
     )
     if not authorized:
+        _check_interrupted(cancel_event, deadline)
         return []
     history_rows = _read_history_rows(
         installation,
@@ -295,10 +321,13 @@ def read_legacy_conversations(
         raise KstLegacyDatabaseError("老版快商通会话尚未同步完整")
 
     conversations: list[KstConversation] = []
+    _check_interrupted(cancel_event, deadline)
     for rec_id in sorted(authorized):
+        _check_interrupted(cancel_event, deadline)
         row = history_rows[rec_id]
         visitor_messages = _validate_visitor_messages(row[3])
         if visitor_messages == 0:
+            _check_interrupted(cancel_event, deadline)
             continue
         start_time = _validate_start_time(row[1], row[2])
         promotion_match = _PROMOTION_PATTERN.search(str(row[4] or ""))
@@ -318,5 +347,7 @@ def read_legacy_conversations(
                 bid_word=str(row[6] or ""),
             )
         )
+        _check_interrupted(cancel_event, deadline)
     conversations.sort(key=lambda item: (item.start_time, item.rec_id))
+    _check_interrupted(cancel_event, deadline)
     return conversations

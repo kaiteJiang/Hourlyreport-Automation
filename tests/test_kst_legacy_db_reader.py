@@ -3,11 +3,14 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from contextlib import closing
 
 import pytest
 
+from modules.kst_local import legacy_db_reader
 from modules.kst_local.legacy_db_reader import (
     KstLegacyDatabaseError,
+    _connect_read_only,
     normalize_legacy_tags,
     read_legacy_conversations,
     read_legacy_promotion_ids,
@@ -498,3 +501,224 @@ def test_cancellation_is_checked_after_each_query_stage(legacy_installation):
         cancel_event=cancel_event,
     )
     assert cancel_event.checks >= 4
+
+
+def test_duplicate_history_rows_for_authorized_rec_id_fail_closed(
+    legacy_installation,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="duplicate",
+        add_time="2026-07-29 09:10:01",
+    )
+    for start in ("2026-07-29 09:10:00", "2026-07-29 09:11:00"):
+        insert_history(
+            legacy_installation.history_db,
+            rec_id="duplicate",
+            start=start,
+            messages=1,
+            promotion_id="10001",
+            tags="",
+        )
+    assert_read_fails_without_modifying_sources(
+        legacy_installation,
+        "2026-07-29",
+    )
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        lambda installation, event: read_legacy_conversations(
+            installation,
+            "2026-07-29",
+            cancel_event=event,
+        ),
+        lambda installation, event: read_legacy_promotion_ids(
+            installation,
+            cancel_event=event,
+        ),
+    ],
+)
+def test_post_processing_loop_checks_cancellation(
+    legacy_installation,
+    reader,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="cancel-during-conversion",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        legacy_installation.history_db,
+        rec_id="cancel-during-conversion",
+        start="2026-07-29 09:10:00",
+        messages=1,
+        promotion_id="10001",
+        tags="有效-三句话",
+    )
+
+    class CancelBeforeFirstConversion:
+        checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks >= 5
+
+    cancel_event = CancelBeforeFirstConversion()
+    paths = (
+        legacy_installation.history_db,
+        *legacy_installation.message_database_paths,
+    )
+    before = {path: path.read_bytes() for path in paths}
+    with pytest.raises(KstLegacyDatabaseError):
+        reader(legacy_installation, cancel_event)
+    assert cancel_event.checks >= 5
+    assert {path: path.read_bytes() for path in paths} == before
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        lambda installation, event: read_legacy_conversations(
+            installation,
+            "2026-07-29",
+            cancel_event=event,
+        ),
+        lambda installation, event: read_legacy_promotion_ids(
+            installation,
+            cancel_event=event,
+        ),
+    ],
+)
+def test_final_empty_return_checks_cancellation(
+    legacy_installation,
+    reader,
+):
+    class CancelBeforeReturn:
+        checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks >= 3
+
+    cancel_event = CancelBeforeReturn()
+    with pytest.raises(KstLegacyDatabaseError):
+        reader(legacy_installation, cancel_event)
+    assert cancel_event.checks >= 3
+
+
+def test_conversation_post_processing_checks_deadline(
+    legacy_installation,
+    monkeypatch,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="deadline-during-tags",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        legacy_installation.history_db,
+        rec_id="deadline-during-tags",
+        start="2026-07-29 09:10:00",
+        messages=1,
+        promotion_id="10001",
+        tags="有效-三句话",
+    )
+
+    class ControlledClock:
+        expired = False
+
+        def monotonic(self):
+            return 10.0 if self.expired else 0.0
+
+    clock = ControlledClock()
+    real_normalize = normalize_legacy_tags
+
+    def expire_during_normalization(*values):
+        result = real_normalize(*values)
+        clock.expired = True
+        return result
+
+    monkeypatch.setattr(legacy_db_reader.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(
+        legacy_db_reader,
+        "normalize_legacy_tags",
+        expire_during_normalization,
+    )
+    assert_read_fails_without_modifying_sources(
+        legacy_installation,
+        "2026-07-29",
+        deadline_seconds=5.0,
+    )
+
+
+def _exception_chain_text(error: BaseException) -> str:
+    values: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        values.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    return "\n".join(values)
+
+
+def test_invalid_input_error_chain_does_not_expose_original_value(
+    legacy_installation,
+):
+    sentinel = "PRIVATE-TARGET-DATE-SENTINEL"
+    with pytest.raises(KstLegacyDatabaseError) as captured:
+        read_legacy_conversations(legacy_installation, sentinel)
+    assert sentinel not in _exception_chain_text(captured.value)
+
+
+def test_sqlite_error_chain_does_not_expose_schema_sentinel(
+    legacy_installation,
+):
+    sentinel = "private_schema_sentinel"
+    live_db = legacy_installation.message_database_paths[0]
+    with sqlite3.connect(live_db) as connection:
+        connection.execute("DROP TABLE DIALOGRECORD_VISITOR")
+        connection.execute(
+            f"""
+            CREATE VIEW DIALOGRECORD_VISITOR AS
+            SELECT {sentinel}() AS recId, '2026-07-29 09:10:01' AS addTime
+            """
+        )
+    with pytest.raises(KstLegacyDatabaseError) as captured:
+        read_legacy_conversations(legacy_installation, "2026-07-29")
+    assert sentinel not in _exception_chain_text(captured.value)
+
+
+def test_read_only_connection_rejects_writes_and_uses_safe_uri(
+    legacy_installation,
+    monkeypatch,
+):
+    real_connect = sqlite3.connect
+    calls = []
+
+    def recording_connect(database, *args, **kwargs):
+        calls.append((database, kwargs))
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(legacy_db_reader.sqlite3, "connect", recording_connect)
+    with closing(
+        _connect_read_only(legacy_installation.message_database_paths[0])
+    ) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM DIALOGRECORD_VISITOR"
+        ).fetchone() == (0,)
+        for statement in (
+            "CREATE TABLE forbidden (id INTEGER)",
+            "INSERT INTO DIALOGRECORD_VISITOR (recId, addTime) VALUES ('x', 'y')",
+            "UPDATE DIALOGRECORD_VISITOR SET recId = 'x'",
+        ):
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                connection.execute(statement)
+
+    database_uri, kwargs = calls[-1]
+    assert "?mode=ro" in database_uri
+    assert "immutable=1" not in database_uri
+    assert kwargs["uri"] is True
+    assert kwargs["timeout"] <= 0.5
