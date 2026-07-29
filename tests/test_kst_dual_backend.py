@@ -393,6 +393,34 @@ def test_legacy_runtime_state_tracks_every_database(
     assert after != before
 
 
+def test_electron_runtime_state_dynamically_tracks_new_identity_database(
+    electron_installation,
+):
+    first_database = electron_installation.database_paths[0]
+    first_database.parent.mkdir(parents=True)
+    first_database.write_bytes(b"database")
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={},
+        auth=KstAuthContext(),
+    )
+    before = installation_runtime_state(
+        electron_installation,
+        "2026-07-29",
+        snapshot,
+    )
+
+    new_database = first_database.parent / "VISITOR_2.db"
+    new_database.write_bytes(b"new database")
+    after = installation_runtime_state(
+        electron_installation,
+        "2026-07-29",
+        snapshot,
+    )
+
+    assert after != before
+    assert str(new_database.resolve()) in after[3]
+
+
 def test_legacy_runtime_state_tracks_sidecars_and_newly_enumerated_shards(
     legacy_installation,
 ):

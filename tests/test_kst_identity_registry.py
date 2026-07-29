@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import sqlite3
 import threading
@@ -43,6 +44,12 @@ class HealthyRuntime:
             "status": "ok",
             "required_endpoints_available": True,
         }
+
+
+class DiagnosticInstallations(list):
+    def __init__(self, values, diagnostics):
+        super().__init__(values)
+        self.diagnostics = tuple(diagnostics)
 
 
 def installation(tmp_path: Path, identity: str) -> KstInstallation:
@@ -377,6 +384,111 @@ def test_registry_requires_refresh_when_electron_database_wal_changes(
     assert calls == [1, 1]
 
 
+def test_electron_new_database_stales_only_its_identity_until_refresh(
+    tmp_path,
+):
+    base = installation(tmp_path, "id-a")
+    database_dir = base.database_paths[0].parent
+    database_dir.mkdir(parents=True)
+    base.database_paths[0].write_bytes(b"database")
+    unrelated_dir = tmp_path / "db" / "id-b"
+    unrelated_dir.mkdir(parents=True)
+    (unrelated_dir / "VISITOR.db").write_bytes(b"other identity")
+    promotion_reads = []
+    runtime_paths = []
+
+    def load_installations():
+        paths = tuple(
+            sorted(
+                path.resolve()
+                for path in database_dir.glob("VISITOR*.db")
+                if path.is_file()
+            )
+        )
+        return [replace(base, database_paths=paths)]
+
+    def read_ids(item):
+        promotion_reads.append(
+            tuple(path.name for path in item.database_paths)
+        )
+        return {"10001"}
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=load_installations,
+        promotion_id_reader=read_ids,
+        project_loader=lambda _root, _project_id: project("a", ["10001"]),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=lambda *_args, **kwargs: (
+            runtime_paths.append(
+                tuple(
+                    path.name
+                    for path in kwargs["installation"].database_paths
+                )
+            )
+            or HealthyRuntime()
+        ),
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    registry.refresh()
+    first = registry.build_runtime("a", "2026-07-29")
+
+    (unrelated_dir / "VISITOR_2.db").write_bytes(b"unrelated new db")
+    assert registry.health()["status"] == "ok"
+
+    (database_dir / "VISITOR_2.db").write_bytes(b"new db")
+    assert registry.health()["status"] == "not_ready"
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
+
+    registry.refresh()
+
+    assert registry.health()["status"] == "ok"
+    second = registry.build_runtime("a", "2026-07-29")
+    assert second is not first
+    assert promotion_reads[-1] == ("VISITOR.db", "VISITOR_2.db")
+    assert runtime_paths[-1] == ("VISITOR.db", "VISITOR_2.db")
+
+
+def test_electron_refresh_captures_new_database_with_static_discovery_result(
+    tmp_path,
+):
+    item = installation(tmp_path, "id-a")
+    database_dir = item.database_paths[0].parent
+    database_dir.mkdir(parents=True)
+    item.database_paths[0].write_bytes(b"database")
+    promotion_reads = []
+
+    def read_ids(current):
+        promotion_reads.append(
+            tuple(path.name for path in current.database_paths)
+        )
+        return {"10001"}
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=read_ids,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    registry.refresh()
+
+    (database_dir / "VISITOR_2.db").write_bytes(b"new database")
+    assert registry.health()["status"] == "not_ready"
+
+    registry.refresh()
+
+    bound = registry.installation_for("a")
+    assert promotion_reads[-1] == ("VISITOR.db", "VISITOR_2.db")
+    assert tuple(
+        path.name for path in bound.database_paths
+    ) == ("VISITOR.db", "VISITOR_2.db")
+
+
 def test_registry_with_no_binding_is_not_healthy(tmp_path):
     registry = registry_for(
         tmp_path,
@@ -389,6 +501,116 @@ def test_registry_with_no_binding_is_not_healthy(tmp_path):
     health = registry.health()
     assert health["status"] == "not_ready"
     assert health["required_endpoints_available"] is False
+
+
+@pytest.mark.parametrize(
+    "ordered_categories",
+    [
+        ("database_busy_or_timeout", "identity_mapping"),
+        ("identity_mapping", "database_busy_or_timeout"),
+    ],
+)
+def test_registry_candidate_failure_priority_is_order_independent(
+    tmp_path,
+    ordered_categories,
+):
+    items = [
+        installation(tmp_path, f"id-{index}")
+        for index in range(len(ordered_categories))
+    ]
+    category_by_identity = {
+        item.identity: category
+        for item, category in zip(items, ordered_categories)
+    }
+
+    def fail_promotion(item):
+        raise KstDiscoveryError(
+            f"private {item.identity} database path",
+            category=category_by_identity[item.identity],
+        )
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: items,
+        promotion_id_reader=fail_promotion,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+
+    registry.refresh()
+
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["error_category"] == "database_busy_or_timeout"
+    assert "private" not in repr(health)
+    assert "database path" not in repr(health)
+
+
+def test_registry_combines_discovery_diagnostics_with_candidate_failures(
+    tmp_path,
+):
+    item = installation(tmp_path, "electron-id")
+    installations = DiagnosticInstallations(
+        [item],
+        [
+            KstDiscoveryError(
+                r"private D:\legacy\locked.db",
+                category="database_busy_or_timeout",
+            )
+        ],
+    )
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: installations,
+        promotion_id_reader=lambda _item: (_ for _ in ()).throw(
+            KstDiscoveryError(
+                "private electron promotion mismatch",
+                category="identity_mapping",
+            )
+        ),
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+
+    registry.refresh()
+
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["error_category"] == "database_busy_or_timeout"
+    assert "private" not in repr(health)
+    assert "legacy" not in repr(health)
+
+
+def test_registry_ignores_bad_discovery_diagnostic_when_binding_is_good(
+    tmp_path,
+):
+    item = installation(tmp_path, "electron-id")
+    installations = DiagnosticInstallations(
+        [item],
+        [
+            KstDiscoveryError(
+                "private legacy database",
+                category="database_busy_or_timeout",
+            )
+        ],
+    )
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: installations,
+        promotion_id_reader=lambda _item: {"10001"},
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+
+    registry.refresh()
+
+    health = registry.health()
+    assert health["status"] == "ok"
+    assert "error_category" not in health
+    assert registry.installation_for("a") is item
 
 
 def test_binding_with_missing_required_endpoints_is_rejected(tmp_path):
@@ -702,6 +924,53 @@ def test_fingerprint_change_bypasses_promotion_cache_without_force(
     with pytest.raises(KstIdentityMappingError):
         registry.installation_for("a")
     assert reads == [{"10001"}, {"20002"}]
+
+
+def test_refresh_rejects_identity_changed_during_promotion_read(
+    tmp_path,
+):
+    item = legacy_installation(tmp_path, "legacy-id")
+    fingerprint = ["v1"]
+    promotion_ids = [{"10001"}]
+    mutate_during_first_read = [True]
+
+    def read_ids(_item):
+        result = set(promotion_ids[0])
+        if mutate_during_first_read[0]:
+            mutate_during_first_read[0] = False
+            fingerprint[0] = "v2"
+            promotion_ids[0] = {"20002"}
+        return result
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [
+            project("a", ["10001"]),
+            project("b", ["20002"]),
+        ],
+        installations_loader=lambda: [item],
+        promotion_id_reader=read_ids,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+        identity_fingerprint_reader=lambda _item: fingerprint[0],
+    )
+
+    registry.refresh()
+    fingerprint[0] = "v1"
+
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["error_category"] == "database_busy_or_timeout"
+    with pytest.raises(KstIdentityMappingError):
+        registry.installation_for("a")
+
+    fingerprint[0] = "v2"
+    registry.refresh()
+
+    assert registry.health()["status"] == "ok"
+    assert registry.installation_for("b") is item
+    with pytest.raises(KstIdentityMappingError):
+        registry.installation_for("a")
 
 
 def test_refresh_failure_atomically_invalidates_old_binding_and_runtime(

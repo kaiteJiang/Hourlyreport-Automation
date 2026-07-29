@@ -49,32 +49,68 @@ _DISCOVERY_SAFE_DETAILS = {
 }
 
 
+def safe_discovery_error(
+    error: BaseException,
+    *,
+    fallback_category: str = "discovery_failed",
+) -> KstDiscoveryError:
+    category = str(
+        getattr(error, "category", fallback_category)
+    ).strip()
+    if category not in _DISCOVERY_ERROR_PRIORITY:
+        category = fallback_category
+    if category not in _DISCOVERY_SAFE_DETAILS:
+        category = "discovery_failed"
+    return KstDiscoveryError(
+        _DISCOVERY_SAFE_DETAILS[category],
+        category=category,
+    )
+
+
+def discovery_error_priority(error: BaseException) -> int:
+    safe_error = safe_discovery_error(error)
+    return _DISCOVERY_ERROR_PRIORITY[safe_error.category]
+
+
 def most_specific_discovery_error(
     errors: Iterable[BaseException],
     *,
     fallback_category: str = "installation_root",
 ) -> KstDiscoveryError:
-    typed_errors: list[tuple[int, int, str]] = []
-    for index, error in enumerate(errors):
-        category = str(
-            getattr(error, "category", "discovery_failed")
-        ).strip()
-        if category not in _DISCOVERY_ERROR_PRIORITY:
-            category = "discovery_failed"
-        typed_errors.append(
-            (_DISCOVERY_ERROR_PRIORITY[category], -index, category)
+    safe_errors = [
+        safe_discovery_error(error)
+        for error in errors
+    ]
+    if not safe_errors:
+        return safe_discovery_error(
+            KstDiscoveryError(
+                "",
+                category=fallback_category,
+            ),
+            fallback_category="installation_root",
         )
-    category = (
-        max(typed_errors)[2]
-        if typed_errors
-        else fallback_category
+    _, selected = max(
+        enumerate(safe_errors),
+        key=lambda pair: (
+            discovery_error_priority(pair[1]),
+            -pair[0],
+        ),
     )
-    if category not in _DISCOVERY_SAFE_DETAILS:
-        category = "installation_root"
-    return KstDiscoveryError(
-        _DISCOVERY_SAFE_DETAILS[category],
-        category=category,
-    )
+    return selected
+
+
+class KstInstallationDiscoveryResult(list[KstInstallationLike]):
+    def __init__(
+        self,
+        installations: Iterable[KstInstallationLike] = (),
+        *,
+        diagnostics: Iterable[BaseException] = (),
+    ) -> None:
+        super().__init__(installations)
+        self.diagnostics = tuple(
+            safe_discovery_error(error)
+            for error in diagnostics
+        )
 
 
 def _active_log_max_age_seconds() -> float:
@@ -370,7 +406,7 @@ def discover_all_installations(
     *,
     require_running_process: bool = True,
     cancel_event: object | None = None,
-) -> list[KstInstallationLike]:
+) -> KstInstallationDiscoveryResult:
     from modules.kst_local.legacy_discovery import discover_legacy_installations
     from modules.kst_local.machine_settings import load_kst_machine_settings
 
@@ -422,4 +458,7 @@ def discover_all_installations(
         unique[(client_family, installation.root, installation.identity)] = installation
     if not unique:
         raise most_specific_discovery_error(discovery_errors)
-    return list(unique.values())
+    return KstInstallationDiscoveryResult(
+        unique.values(),
+        diagnostics=discovery_errors,
+    )

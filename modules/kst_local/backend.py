@@ -7,6 +7,7 @@ from typing import Any
 from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import KstDiscoveryError
 from modules.kst_local.fingerprint import (
+    electron_identity_database_paths,
     installation_identity_fingerprint,
     legacy_identity_database_paths,
 )
@@ -153,6 +154,13 @@ def installation_runtime_state(
     if isinstance(installation, KstInstallation):
         if snapshot is None:
             raise KstDiscoveryError("快商通 Electron 日志快照缺失")
+        installation = replace(
+            installation,
+            database_paths=electron_identity_database_paths(
+                installation,
+                cancel_event=cancel_event,
+            ),
+        )
         return (
             "electron",
             *_runtime_input_state(

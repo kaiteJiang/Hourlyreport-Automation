@@ -18,8 +18,12 @@ from modules.kst_local.backend import (
 from modules.kst_local.discovery import (
     KstDiscoveryError,
     discover_all_installations,
+    most_specific_discovery_error,
 )
-from modules.kst_local.fingerprint import installation_identity_fingerprint
+from modules.kst_local.fingerprint import (
+    capture_installation_identity,
+    installation_identity_fingerprint,
+)
 from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
@@ -56,6 +60,7 @@ _SAFE_FAILURE_DETAILS = {
     "identity_mapping": "快商通身份映射未就绪",
     "installation_root": "快商通客户端目录无效",
     "data_root": "快商通数据目录无效",
+    "discovery_failed": "快商通客户端发现失败",
 }
 
 
@@ -158,6 +163,7 @@ def _runtime_input_state(
             database_path,
             database_path.with_name(database_path.name + "-wal"),
             database_path.with_name(database_path.name + "-shm"),
+            database_path.with_name(database_path.name + "-journal"),
         )
         for path in related_paths:
             try:
@@ -299,6 +305,29 @@ class KstIdentityRegistry:
             cancel_event=cancel_event,
         )
 
+    def _capture_identity_for(
+        self,
+        installation: KstInstallationLike,
+        *,
+        cancel_event: Any = None,
+    ) -> tuple[KstInstallationLike, Any]:
+        captured, default_fingerprint = capture_installation_identity(
+            installation,
+            cancel_event=cancel_event,
+        )
+        if (
+            self._identity_fingerprint_reader
+            is installation_identity_fingerprint
+        ):
+            return captured, default_fingerprint
+        return (
+            captured,
+            self._identity_fingerprint_for(
+                captured,
+                cancel_event=cancel_event,
+            ),
+        )
+
     def _promotion_ids_for(
         self,
         installation: KstInstallationLike,
@@ -378,12 +407,13 @@ class KstIdentityRegistry:
             self._installations_loader,
             cancel_event=cancel_event,
         )
+        failure_diagnostics: list[BaseException] = list(
+            getattr(installations, "diagnostics", ()) or ()
+        )
         bindings: dict[str, KstInstallationLike] = {}
         binding_fingerprints: dict[str, Any] = {}
         project_errors: dict[str, str] = {}
-        identity_error_count = 0
-        last_error_category: str | None = None
-        last_error_detail: str | None = None
+        identity_error_count = len(failure_diagnostics)
 
         candidates: dict[
             str,
@@ -397,9 +427,9 @@ class KstIdentityRegistry:
                 raise KstDiscoveryError(
                     "快商通读取已取消",
                     category="database_busy_or_timeout",
-                )
+            )
             try:
-                fingerprint = self._identity_fingerprint_for(
+                installation, fingerprint_before = self._capture_identity_for(
                     installation,
                     cancel_event=cancel_event,
                 )
@@ -410,14 +440,15 @@ class KstIdentityRegistry:
                 )
                 if (
                     discovered_fingerprint is not None
-                    and discovered_fingerprint != fingerprint
+                    and discovered_fingerprint != fingerprint_before
                 ):
-                    raise KstIdentityMappingError(
-                        "快商通身份数据库在发现期间发生变化"
+                    raise KstDiscoveryError(
+                        "快商通身份数据库在发现期间发生变化",
+                        category="database_busy_or_timeout",
                     )
                 known_ids = self._promotion_ids_for(
                     installation,
-                    fingerprint=fingerprint,
+                    fingerprint=fingerprint_before,
                     cancel_event=cancel_event,
                 )
                 matched_projects = {
@@ -433,17 +464,29 @@ class KstIdentityRegistry:
                 ):
                     identity_error_count += 1
                     unready_projects.update(matched_projects)
-                    last_error_category = "identity_mapping"
-                    last_error_detail = _SAFE_FAILURE_DETAILS[
-                        last_error_category
-                    ]
+                    failure_diagnostics.append(
+                        KstIdentityMappingError(
+                            "快商通必需接口不可用"
+                        )
+                    )
                     continue
+                (
+                    installation_after,
+                    fingerprint_after,
+                ) = self._capture_identity_for(
+                    installation,
+                    cancel_event=cancel_event,
+                )
+                if fingerprint_before != fingerprint_after:
+                    raise KstDiscoveryError(
+                        "快商通身份数据库读取期间发生变化",
+                        category="database_busy_or_timeout",
+                    )
+                installation = installation_after
+                fingerprint = fingerprint_after
             except Exception as exc:
                 identity_error_count += 1
-                (
-                    last_error_category,
-                    last_error_detail,
-                ) = _safe_failure(exc)
+                failure_diagnostics.append(exc)
                 continue
             if len(matched_projects) == 1:
                 candidates[next(iter(matched_projects))].append(
@@ -471,6 +514,22 @@ class KstIdentityRegistry:
                 binding_fingerprints[project_id] = fingerprint
             else:
                 project_errors[project_id] = "未找到匹配身份"
+        failure_diagnostics.extend(
+            KstIdentityMappingError(reason)
+            for reason in project_errors.values()
+        )
+        if bindings:
+            last_error_category = None
+            last_error_detail = None
+        else:
+            selected_error = most_specific_discovery_error(
+                failure_diagnostics,
+                fallback_category="identity_mapping",
+            )
+            (
+                last_error_category,
+                last_error_detail,
+            ) = _safe_failure(selected_error)
         with self._state_lock:
             changed_projects = {
                 project_id

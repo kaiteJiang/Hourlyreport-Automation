@@ -10,7 +10,7 @@ from modules.kst_local.discovery import (
     KstDiscoveryError,
     most_specific_discovery_error,
 )
-from modules.kst_local.fingerprint import installation_identity_fingerprint
+from modules.kst_local.fingerprint import capture_installation_identity
 from modules.kst_local.legacy_db_reader import (
     KstLegacyDatabaseError,
     inspect_legacy_read_capability,
@@ -419,15 +419,32 @@ def _discover_company_identities(
             message_database_paths=message_paths,
         )
         try:
+            installation, fingerprint_before = (
+                capture_installation_identity(
+                    installation,
+                    cancel_event=cancel_event,
+                    deadline=deadline,
+                )
+            )
             promotion_ids = inspect_legacy_read_capability(
                 installation,
                 cancel_event=cancel_event,
                 deadline=deadline,
             )
-            fingerprint = installation_identity_fingerprint(
-                installation,
-                cancel_event=cancel_event,
+            installation_after, fingerprint_after = (
+                capture_installation_identity(
+                    installation,
+                    cancel_event=cancel_event,
+                    deadline=deadline,
+                )
             )
+            if fingerprint_before != fingerprint_after:
+                raise KstLegacyDatabaseError(
+                    "旧版快商通数据库读取期间发生变化",
+                    category="database_busy_or_timeout",
+                )
+            installation = installation_after
+            fingerprint = fingerprint_after
         except KstLegacyDatabaseError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise KstDiscoveryError(

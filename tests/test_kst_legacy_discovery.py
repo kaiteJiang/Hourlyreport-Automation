@@ -373,6 +373,108 @@ def test_legacy_identity_discovery_uses_one_absolute_five_second_deadline(
     assert deadlines == [("company-a", cancel_event, 105.0)]
 
 
+def test_legacy_discovery_rejects_promotion_ids_when_database_changes_during_read(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    original_reader = legacy_discovery.inspect_legacy_read_capability
+    reads = []
+
+    def read_then_change(installation, **kwargs):
+        promotion_ids = original_reader(installation, **kwargs)
+        reads.append(set(promotion_ids))
+        with sqlite3.connect(installation.history_db) as connection:
+            connection.execute(
+                """
+                UPDATE OC_HDVISITORINFO
+                SET visitorCustomField = ?
+                WHERE recId = ?
+                """,
+                ("推广 ID：20002", "live-identity"),
+            )
+        installation.history_db.touch()
+        return promotion_ids
+
+    monkeypatch.setattr(
+        legacy_discovery,
+        "inspect_legacy_read_capability",
+        read_then_change,
+    )
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_legacy_installations(
+            explicit_root=install,
+            explicit_data_root=data,
+            process_paths=[install / "OnlineCS.exe"],
+            now_timestamp=(
+                data / "logs" / "260729090000.log"
+            ).stat().st_mtime,
+        )
+
+    assert captured.value.category == "database_busy_or_timeout"
+    assert reads == [{"10001"}]
+
+    monkeypatch.setattr(
+        legacy_discovery,
+        "inspect_legacy_read_capability",
+        original_reader,
+    )
+    stable = discover_legacy_installations(
+        explicit_root=install,
+        explicit_data_root=data,
+        process_paths=[install / "OnlineCS.exe"],
+        now_timestamp=(
+            data / "logs" / "260729090000.log"
+        ).stat().st_mtime,
+    )
+
+    assert stable[0].promotion_ids == frozenset({"20002"})
+
+
+def test_legacy_reader_uses_same_dynamic_shard_manifest_as_pre_fingerprint(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    company_dir = data / "db" / "company-a"
+    original_rglob = type(company_dir).rglob
+    scans = []
+
+    def add_bad_shard_before_pre_fingerprint(path, pattern):
+        if path == company_dir and pattern == "*_CS.pdb":
+            scans.append(1)
+            if len(scans) == 2:
+                bad_shard = (
+                    company_dir
+                    / "agent-race"
+                    / "07290902-onlie"
+                    / "race_CS.pdb"
+                )
+                bad_shard.parent.mkdir(parents=True)
+                bad_shard.write_bytes(b"not sqlite")
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(
+        type(company_dir),
+        "rglob",
+        add_bad_shard_before_pre_fingerprint,
+    )
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_legacy_installations(
+            explicit_root=install,
+            explicit_data_root=data,
+            process_paths=[install / "OnlineCS.exe"],
+            now_timestamp=(
+                data / "logs" / "260729090000.log"
+            ).stat().st_mtime,
+        )
+
+    assert captured.value.category == "database_incompatible"
+    assert len(scans) >= 2
+
+
 def test_legacy_liveness_rechecks_exact_process_path_and_recent_log(tmp_path):
     install, data = make_legacy_tree(tmp_path)
     now = (data / "logs" / "260729090000.log").stat().st_mtime
@@ -722,3 +824,48 @@ def test_combined_automatic_discovery_propagates_most_specific_failure(
     assert captured.value.category == expected_category
     assert "private" not in str(captured.value)
     assert "SQL" not in str(captured.value)
+
+
+def test_combined_discovery_preserves_safe_legacy_diagnostic_with_electron_result(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("KST_INSTALLATION_ROOT", raising=False)
+    electron_item = type(
+        "ElectronInstallation",
+        (),
+        {
+            "root": tmp_path / "electron",
+            "identity": "electron-id",
+        },
+    )()
+    monkeypatch.setattr(
+        discovery,
+        "discover_installations",
+        lambda **_kwargs: [electron_item],
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "discover_legacy_installations",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            KstDiscoveryError(
+                r"private D:\customer\legacy.db SQL",
+                category="database_busy_or_timeout",
+            )
+        ),
+    )
+
+    result = discover_all_installations(
+        tmp_path,
+        require_running_process=True,
+    )
+
+    assert result == [electron_item]
+    assert [
+        diagnostic.category
+        for diagnostic in result.diagnostics
+    ] == ["database_busy_or_timeout"]
+    diagnostic_text = repr(result.diagnostics)
+    assert "private" not in diagnostic_text
+    assert "customer" not in diagnostic_text
+    assert "SQL" not in diagnostic_text
