@@ -7,7 +7,12 @@ import pytest
 
 from modules.kst_local import discovery
 from modules.kst_local import legacy_discovery
-from modules.kst_local.discovery import KstDiscoveryError, discover_all_installations
+from modules.kst_local.discovery import (
+    KstDiscoveryError,
+    KstInstallationDiscoveryResult,
+    discover_all_installations,
+)
+from modules.kst_local.identity_registry import KstIdentityRegistry
 from modules.kst_local.legacy_discovery import (
     discover_legacy_installations,
     legacy_installation_active,
@@ -307,39 +312,101 @@ def test_automatic_legacy_discovery_reports_locked_database(
     assert captured.value.category == "database_busy_or_timeout"
 
 
-def test_automatic_legacy_discovery_returns_good_identity_despite_bad_peer(
+@pytest.mark.parametrize(
+    ("bad_kind", "bad_identity", "expected_category"),
+    [
+        ("incompatible", "company-0", "database_incompatible"),
+        ("incompatible", "company-z", "database_incompatible"),
+        ("locked", "company-0", "database_busy_or_timeout"),
+        ("locked", "company-z", "database_busy_or_timeout"),
+    ],
+)
+def test_automatic_legacy_peer_diagnostic_reaches_registry_safely(
     tmp_path,
     monkeypatch,
+    bad_kind,
+    bad_identity,
+    expected_category,
 ):
     install, data = make_legacy_tree(tmp_path)
     bad_history = (
-        data / "db" / "company-b" / "company-b_HIS.cdb"
+        data / "db" / bad_identity / f"{bad_identity}_HIS.cdb"
     )
     sqlite_history(bad_history)
     bad_shard = (
         data
         / "db"
-        / "company-b"
+        / bad_identity
         / "agent-b"
         / "07290900-onlie"
         / "agent-b_CS.pdb"
     )
-    bad_shard.parent.mkdir(parents=True)
-    bad_shard.write_bytes(b"not sqlite")
+    if bad_kind == "incompatible":
+        bad_shard.parent.mkdir(parents=True)
+        bad_shard.write_bytes(b"not sqlite")
+    else:
+        sqlite_messages(bad_shard)
     configure_automatic_legacy_candidates(
         monkeypatch,
         install,
         data,
     )
+    locker = None
+    if bad_kind == "locked":
+        locker = sqlite3.connect(bad_history, timeout=0)
+        locker.execute("BEGIN EXCLUSIVE")
 
-    found = discover_legacy_installations(
-        process_paths=[install / "OnlineCS.exe"],
-        now_timestamp=(
-            data / "logs" / "260729090000.log"
-        ).stat().st_mtime,
-    )
+    try:
+        found = discover_legacy_installations(
+            process_paths=[install / "OnlineCS.exe"],
+            now_timestamp=(
+                data / "logs" / "260729090000.log"
+            ).stat().st_mtime,
+        )
+    finally:
+        if locker is not None:
+            locker.rollback()
+            locker.close()
 
     assert [item.identity for item in found] == ["company-a"]
+    assert [
+        diagnostic.category
+        for diagnostic in found.diagnostics
+    ] == [expected_category]
+    diagnostic_text = repr(found.diagnostics)
+    assert bad_identity not in diagnostic_text
+    assert str(data) not in diagnostic_text
+    assert "SQL" not in diagnostic_text
+
+    def configured_project(promotion_id):
+        return {
+            "project_id": "target",
+            "accounts": [{"kst_ids": [promotion_id]}],
+            "kst": {},
+        }
+
+    unmatched = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [configured_project("99999")],
+        installations_loader=lambda: found,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    unmatched.refresh()
+    unmatched_health = unmatched.health()
+    assert unmatched_health["status"] == "not_ready"
+    assert unmatched_health["error_category"] == expected_category
+    assert bad_identity not in repr(unmatched_health)
+
+    matched = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [configured_project("10001")],
+        installations_loader=lambda: found,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    matched.refresh()
+    assert matched.health()["status"] == "ok"
 
 
 def test_legacy_identity_discovery_uses_one_absolute_five_second_deadline(
@@ -865,6 +932,55 @@ def test_combined_discovery_preserves_safe_legacy_diagnostic_with_electron_resul
         diagnostic.category
         for diagnostic in result.diagnostics
     ] == ["database_busy_or_timeout"]
+    diagnostic_text = repr(result.diagnostics)
+    assert "private" not in diagnostic_text
+    assert "customer" not in diagnostic_text
+    assert "SQL" not in diagnostic_text
+
+
+def test_combined_discovery_merges_diagnostics_from_nonempty_legacy_result(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("KST_INSTALLATION_ROOT", raising=False)
+    legacy_item = type(
+        "LegacyInstallation",
+        (),
+        {
+            "root": tmp_path / "legacy",
+            "identity": "legacy-good",
+            "client_family": "legacy_java",
+        },
+    )()
+    monkeypatch.setattr(
+        discovery,
+        "discover_installations",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "discover_legacy_installations",
+        lambda **_kwargs: KstInstallationDiscoveryResult(
+            [legacy_item],
+            diagnostics=[
+                KstDiscoveryError(
+                    r"private D:\customer\peer.db SQL",
+                    category="database_incompatible",
+                )
+            ],
+        ),
+    )
+
+    result = discover_all_installations(
+        tmp_path,
+        require_running_process=True,
+    )
+
+    assert result == [legacy_item]
+    assert [
+        diagnostic.category
+        for diagnostic in result.diagnostics
+    ] == ["database_incompatible"]
     diagnostic_text = repr(result.diagnostics)
     assert "private" not in diagnostic_text
     assert "customer" not in diagnostic_text

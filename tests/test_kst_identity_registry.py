@@ -303,6 +303,191 @@ def test_registry_reuses_runtime_when_semantic_inputs_are_unchanged(tmp_path):
     assert calls == [1]
 
 
+@pytest.mark.parametrize(
+    "mutation_stage",
+    [
+        "before_state",
+        "after_state",
+        "before_builder",
+        "during_builder",
+        "before_cached_return",
+    ],
+)
+def test_runtime_capture_rejects_database_added_during_request(
+    tmp_path,
+    mutation_stage,
+):
+    item = installation(tmp_path, "id-a")
+    database_dir = item.database_paths[0].parent
+    database_dir.mkdir(parents=True)
+    item.database_paths[0].write_bytes(b"database")
+    new_database = database_dir / "VISITOR_2.db"
+    control = {
+        "armed": False,
+        "mutate_on_monotonic": False,
+    }
+    state_paths = []
+    builder_paths = []
+
+    def add_database():
+        if not new_database.exists():
+            new_database.write_bytes(b"new database")
+
+    def monotonic():
+        if (
+            control["armed"]
+            and control["mutate_on_monotonic"]
+        ):
+            control["mutate_on_monotonic"] = False
+            add_database()
+        return 100.0
+
+    def check_liveness(current, **_kwargs):
+        if control["armed"] and mutation_stage == "before_state":
+            add_database()
+        return True
+
+    def read_state(current, *_args, **_kwargs):
+        state_paths.append(
+            tuple(path.name for path in current.database_paths)
+        )
+        if control["armed"] and mutation_stage == "after_state":
+            add_database()
+        if (
+            control["armed"]
+            and mutation_stage == "before_cached_return"
+        ):
+            control["mutate_on_monotonic"] = True
+        return "stable"
+
+    def build_config(loaded, _base):
+        if control["armed"] and mutation_stage == "before_builder":
+            add_database()
+        return loaded
+
+    def build_runtime(*_args, **kwargs):
+        builder_paths.append(
+            tuple(
+                path.name
+                for path in kwargs["installation"].database_paths
+            )
+        )
+        if control["armed"] and mutation_stage == "during_builder":
+            add_database()
+        return HealthyRuntime()
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project(
+            "a",
+            ["10001"],
+        ),
+        config_builder=build_config,
+        runtime_builder=build_runtime,
+        runtime_state_reader=read_state,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=check_liveness,
+        monotonic=monotonic,
+    )
+    registry.refresh()
+    if mutation_stage == "before_cached_return":
+        registry.build_runtime("a", "2026-07-29")
+    calls_before_failure = len(builder_paths)
+    control["armed"] = True
+
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
+
+    expected_discarded_builds = (
+        1
+        if mutation_stage == "during_builder"
+        else 0
+    )
+    assert len(builder_paths) == (
+        calls_before_failure + expected_discarded_builds
+    )
+    assert state_paths[-1] == ("VISITOR.db",)
+    if expected_discarded_builds:
+        assert builder_paths[-1] == ("VISITOR.db",)
+    assert registry.health()["status"] == "not_ready"
+
+    control["armed"] = False
+    registry.refresh()
+    stable_runtime = registry.build_runtime("a", "2026-07-29")
+
+    assert stable_runtime is not None
+    assert state_paths[-1] == ("VISITOR.db", "VISITOR_2.db")
+    assert builder_paths[-1] == ("VISITOR.db", "VISITOR_2.db")
+
+
+def test_legacy_runtime_capture_rejects_new_shard_during_state(
+    tmp_path,
+):
+    item = legacy_installation(tmp_path, "legacy-id")
+    materialize_legacy_database_files(item)
+    new_shard = (
+        item.history_db.parent
+        / "agent-race"
+        / "07290902-onlie"
+        / "race_CS.pdb"
+    )
+    armed = [False]
+    builder_paths = []
+
+    def read_state(current, *_args, **_kwargs):
+        if armed[0]:
+            new_shard.parent.mkdir(parents=True)
+            new_shard.write_bytes(b"new shard")
+        return tuple(
+            path.name for path in current.message_database_paths
+        )
+
+    def build_runtime(*_args, **kwargs):
+        builder_paths.append(
+            tuple(
+                path.name
+                for path in kwargs[
+                    "installation"
+                ].message_database_paths
+            )
+        )
+        return HealthyRuntime()
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project(
+            "a",
+            ["10001"],
+        ),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=build_runtime,
+        runtime_state_reader=read_state,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    registry.refresh()
+    armed[0] = True
+
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
+
+    assert builder_paths == []
+    armed[0] = False
+    registry.refresh()
+    registry.build_runtime("a", "2026-07-29")
+    assert set(builder_paths[-1]) == {
+        "first_CS.pdb",
+        "second_CS.pdb",
+        "race_CS.pdb",
+    }
+
+
 def test_registry_rebuilds_runtime_on_state_change_or_ttl_expiry(tmp_path):
     now = [100.0]
     calls = []

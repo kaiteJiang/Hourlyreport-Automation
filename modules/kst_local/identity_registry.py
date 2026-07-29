@@ -579,6 +579,20 @@ class KstIdentityRegistry:
         *,
         cancel_event: Any = None,
     ) -> Any:
+        _, fingerprint = self._capture_bound_identity_unlocked(
+            project_id,
+            installation,
+            cancel_event=cancel_event,
+        )
+        return fingerprint
+
+    def _capture_bound_identity_unlocked(
+        self,
+        project_id: str,
+        installation: KstInstallationLike,
+        *,
+        cancel_event: Any = None,
+    ) -> tuple[KstInstallationLike, Any]:
         if project_id in self._stale_projects:
             raise KstIdentityMappingError(
                 "快商通身份数据库已变化，必须重新扫描"
@@ -591,7 +605,7 @@ class KstIdentityRegistry:
             self._mark_binding_stale_unlocked(project_id, error)
             raise error
         try:
-            current = self._identity_fingerprint_for(
+            captured, current = self._capture_identity_for(
                 installation,
                 cancel_event=cancel_event,
             )
@@ -610,7 +624,7 @@ class KstIdentityRegistry:
             )
             self._mark_binding_stale_unlocked(project_id, error)
             raise error
-        return current
+        return captured, current
 
     def installation_for(
         self,
@@ -659,10 +673,10 @@ class KstIdentityRegistry:
         *,
         cancel_event: Any = None,
     ) -> Any:
-        installation = self._installation_for_unlocked(project_id)
-        self._validate_binding_fingerprint_unlocked(
+        bound_installation = self._installation_for_unlocked(project_id)
+        installation, _ = self._capture_bound_identity_unlocked(
             project_id,
-            installation,
+            bound_installation,
             cancel_event=cancel_event,
         )
         _call_with_supported_keywords(
@@ -688,6 +702,11 @@ class KstIdentityRegistry:
                 cancel_event=cancel_event,
             ),
         )
+        self._capture_bound_identity_unlocked(
+            project_id,
+            installation,
+            cancel_event=cancel_event,
+        )
         key = (project_id, target_date)
         now = self._monotonic()
         with self._runtime_lock:
@@ -700,8 +719,18 @@ class KstIdentityRegistry:
                     and cached_state == state
                 ):
                     self._runtime_cache.move_to_end(key)
+                    self._capture_bound_identity_unlocked(
+                        project_id,
+                        installation,
+                        cancel_event=cancel_event,
+                    )
                     return runtime
             config = self._config_builder(project, {})
+            self._capture_bound_identity_unlocked(
+                project_id,
+                installation,
+                cancel_event=cancel_event,
+            )
             runtime = _call_with_supported_keywords(
                 self._runtime_builder,
                 config,
@@ -714,6 +743,11 @@ class KstIdentityRegistry:
             self._runtime_cache.move_to_end(key)
             while len(self._runtime_cache) > self._runtime_cache_max_entries:
                 self._runtime_cache.popitem(last=False)
+            self._capture_bound_identity_unlocked(
+                project_id,
+                installation,
+                cancel_event=cancel_event,
+            )
             return runtime
 
     def health(self, *, cancel_event: Any = None) -> dict[str, Any]:

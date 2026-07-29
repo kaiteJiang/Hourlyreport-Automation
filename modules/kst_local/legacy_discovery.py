@@ -8,6 +8,7 @@ from typing import Callable, Iterable
 
 from modules.kst_local.discovery import (
     KstDiscoveryError,
+    KstInstallationDiscoveryResult,
     most_specific_discovery_error,
 )
 from modules.kst_local.fingerprint import capture_installation_identity
@@ -487,7 +488,7 @@ def discover_legacy_installations(
     require_running_process: bool = True,
     version_reader: Callable[[Path], str | None] = read_windows_file_version,
     cancel_event: object | None = None,
-) -> list[LegacyKstInstallation]:
+) -> KstInstallationDiscoveryResult:
     environment_root = os.environ.get("KST_INSTALLATION_ROOT")
     root_is_explicit = explicit_root is not None
     if explicit_root is None and environment_root:
@@ -627,7 +628,10 @@ def discover_legacy_installations(
     if explicit_data_root is not None and data_errors:
         raise data_errors[0]
     if found:
-        return found
+        return KstInstallationDiscoveryResult(
+            found,
+            diagnostics=automatic_errors,
+        )
     raise most_specific_discovery_error(
         [
             *root_errors,

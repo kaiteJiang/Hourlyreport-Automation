@@ -440,13 +440,15 @@ def discover_all_installations(
             discovery_errors.append(exc)
     if configured_root is None or is_explicit_legacy_root:
         try:
-            installations.extend(
-                discover_legacy_installations(
-                    explicit_root=legacy_explicit_root,
-                    explicit_data_root=settings.data_root,
-                    require_running_process=require_running_process,
-                    cancel_event=cancel_event,
-                )
+            legacy_result = discover_legacy_installations(
+                explicit_root=legacy_explicit_root,
+                explicit_data_root=settings.data_root,
+                require_running_process=require_running_process,
+                cancel_event=cancel_event,
+            )
+            installations.extend(legacy_result)
+            discovery_errors.extend(
+                getattr(legacy_result, "diagnostics", ()) or ()
             )
         except KstDiscoveryError as exc:
             if legacy_explicit_root is not None or settings.data_root is not None:
