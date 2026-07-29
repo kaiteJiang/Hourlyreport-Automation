@@ -290,26 +290,32 @@ def discover_all_installations(
     is_explicit_legacy_root = bool(
         configured_root and (configured_root / "OnlineCS.exe").is_file()
     )
+    electron_explicit_root = (
+        None if is_explicit_legacy_root else configured_root
+    )
+    legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
     try:
         installations.extend(
             discover_installations(
-                explicit_root=(None if is_explicit_legacy_root else configured_root),
+                explicit_root=electron_explicit_root,
                 require_running_process=require_running_process,
             )
         )
     except KstDiscoveryError:
-        pass
+        if electron_explicit_root is not None:
+            raise
     try:
         installations.extend(
             discover_legacy_installations(
-                explicit_root=(configured_root if is_explicit_legacy_root else None),
+                explicit_root=legacy_explicit_root,
                 explicit_data_root=settings.data_root,
                 require_running_process=require_running_process,
             )
         )
     except KstDiscoveryError:
-        pass
+        if legacy_explicit_root is not None or settings.data_root is not None:
+            raise
     unique: dict[tuple[str, Path, str], KstInstallationLike] = {}
     for installation in installations:
         client_family = getattr(installation, "client_family", "electron")
