@@ -69,6 +69,8 @@ class KstApiManager(QObject):
     status_changed = Signal(bool, str)
     log_message = Signal(str)
     _retry_requested = Signal(int, int)
+    _worker_finished = Signal(int)
+    _status_requested = Signal(int, bool, str)
 
     def __init__(
         self,
@@ -126,6 +128,14 @@ class KstApiManager(QObject):
             self._start_retry_timer,
             Qt.ConnectionType.QueuedConnection,
         )
+        self._worker_finished.connect(
+            self._on_worker_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._status_requested.connect(
+            self._publish_status,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def start(self) -> None:
         with self._lock:
@@ -152,7 +162,6 @@ class KstApiManager(QObject):
             self._generation += 1
             self._cancel_event.set()
             server = self._server if self._owns_server else None
-            self._worker = None
             self._server = None
             self._server_thread = None
             self._registry = None
@@ -161,7 +170,10 @@ class KstApiManager(QObject):
             self._ready = False
             self._last_registry_refresh_at = None
             self._rescan_pending = False
-            self._detail = "商务通 API 已停止"
+            detail = "商务通 API 已停止"
+            self._detail = detail
+            generation = self._generation
+        self._queue_status(generation, False, detail)
         if server is not None:
             threading.Thread(
                 target=self._request_server_shutdown,
@@ -198,7 +210,26 @@ class KstApiManager(QObject):
         with self._lock:
             return self._detail
 
-    def _emit_status(self, ready: bool, detail: str) -> None:
+    def _queue_status(
+        self,
+        generation: int,
+        ready: bool,
+        detail: str,
+    ) -> None:
+        try:
+            self._status_requested.emit(generation, ready, detail)
+        except RuntimeError:
+            pass
+
+    def _publish_status(
+        self,
+        generation: int,
+        ready: bool,
+        detail: str,
+    ) -> None:
+        with self._lock:
+            if generation != self._generation:
+                return
         try:
             self.status_changed.emit(ready, detail)
         except RuntimeError:
@@ -236,7 +267,6 @@ class KstApiManager(QObject):
             if not self._started or self._stopping:
                 return
             if self._worker is not None and self._worker.is_alive():
-                self._rescan_pending = True
                 return
             target = (
                 self._refresh_owned_registry
@@ -276,6 +306,21 @@ class KstApiManager(QObject):
                 self._retry_requested.emit(0, generation)
             elif delay_ms is not None:
                 self._retry_requested.emit(delay_ms, generation)
+            self._worker_finished.emit(generation)
+
+    def _on_worker_finished(self, generation: int) -> None:
+        with self._lock:
+            should_start_current_generation = (
+                self._started
+                and not self._stopping
+                and generation != self._generation
+                and (
+                    self._worker is None
+                    or not self._worker.is_alive()
+                )
+            )
+        if should_start_current_generation:
+            self._ensure_service_async()
 
     def _start_retry_timer(self, delay_ms: int, generation: int) -> None:
         with self._lock:
@@ -316,7 +361,7 @@ class KstApiManager(QObject):
             self._last_error_key = None
             self._last_error_log_at = None
             delay_ms = self._retry_intervals_ms[0]
-        self._emit_status(True, detail)
+        self._queue_status(generation, True, detail)
         if log_message:
             self._emit_log(log_message)
         return delay_ms
@@ -327,34 +372,29 @@ class KstApiManager(QObject):
     ) -> tuple[str, str]:
         text = str(error or "").strip()
         lowered = text.casefold()
-        unsafe = (
-            not text
-            or "traceback" in lowered
-            or "\n" in text
-            or "\r" in text
-            or any(
-                f"{letter}:\\" in text or f"{letter}:/" in text
-                for letter in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if any(
+            credential_key in lowered
+            for credential_key in (
+                "token",
+                "api_key",
+                "secret",
+                "password",
+                "authorization",
             )
-        )
+        ):
+            return "authentication", "商务通本地 API 认证配置无效"
         if (
             "根目录无效" in text
             or "程序目录不具备读取能力" in text
             or "目录不具备商务通读取能力" in text
         ):
-            return (
-                "installation_root",
-                "快商通客户端目录无效" if unsafe else text,
-            )
+            return "installation_root", "快商通客户端目录无效"
         if "数据目录" in text and (
             "不具备读取能力" in text
             or "无法扫描" in text
             or "未找到" in text
         ):
-            return (
-                "data_root",
-                "快商通数据目录无效" if unsafe else text,
-            )
+            return "data_root", "快商通数据目录无效"
         if "客户端未运行" in text or "未检测到正在运行" in text:
             return "client_not_running", "客户端未运行"
         if "数据库结构不兼容" in text or (
@@ -369,17 +409,13 @@ class KstApiManager(QObject):
             return "port_in_use", "商务通本地 API 端口被占用"
         if (
             "身份" in text
+            or "自动数据源" in text
             or "推广 id" in lowered
             or "绑定" in text
             or "映射" in text
         ):
-            return (
-                "identity_mapping",
-                "快商通身份映射未就绪" if unsafe else text,
-            )
-        if unsafe:
-            return "startup_failed", "商务通本地 API 启动失败"
-        return f"startup:{text}", text
+            return "identity_mapping", "快商通身份映射未就绪"
+        return "startup_failed", "商务通本地 API 启动失败"
 
     def _record_failure(
         self,
@@ -403,7 +439,7 @@ class KstApiManager(QObject):
             self._ready = False
             self._detail = detail
             delay_ms = self._next_failure_delay_locked()
-        self._emit_status(False, detail)
+        self._queue_status(generation, False, detail)
         if should_log:
             self._emit_log(detail)
         return delay_ms
@@ -511,8 +547,17 @@ class KstApiManager(QObject):
         server: Any,
         generation: int,
         cancel_event: threading.Event,
+        port: int,
     ) -> None:
         failure: BaseException | str = "商务通本地 API 已停止"
+        delay_ms = self._record_success(
+            generation,
+            cancel_event,
+            f"商务通本地 API 已启动：127.0.0.1:{port}",
+            log_message="商务通本地 API 已随程序启动",
+        )
+        if delay_ms is not None:
+            self._retry_requested.emit(delay_ms, generation)
         try:
             server.serve_forever()
         except Exception as exc:
@@ -592,7 +637,8 @@ class KstApiManager(QObject):
                 lost_external = self._ready and self._external_server
                 self._external_server = False
             if lost_external:
-                self._emit_status(
+                self._queue_status(
+                    generation,
                     False,
                     "现有商务通本地 API 已断开，正在重启",
                 )
@@ -630,16 +676,9 @@ class KstApiManager(QObject):
                     self._last_registry_refresh_at = self._monotonic()
                     self._owns_server = True
                     self._external_server = False
-                    self._ready = True
-                    self._detail = (
-                        f"商务通本地 API 已启动：127.0.0.1:{port}"
-                    )
-                    self._retry_index = 0
-                    self._last_error_key = None
-                    self._last_error_log_at = None
                     self._server_thread = threading.Thread(
                         target=self._serve_owned_server,
-                        args=(server, generation, cancel_event),
+                        args=(server, generation, cancel_event, port),
                         name="kst-api-server",
                         daemon=True,
                     )
@@ -648,10 +687,7 @@ class KstApiManager(QObject):
             if close_server:
                 self._close_server_once(server)
                 return None
-            detail = f"商务通本地 API 已启动：127.0.0.1:{port}"
-            self._emit_status(True, detail)
-            self._emit_log("商务通本地 API 已随程序启动")
-            return self._retry_intervals_ms[0]
+            return None
         except Exception as exc:
             return self._record_failure(
                 generation,

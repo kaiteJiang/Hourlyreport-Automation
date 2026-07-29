@@ -3397,6 +3397,7 @@ class MainWindow(QMainWindow):
         self._kst_api_requested = False
         self._kst_api_manager_active = False
         self.kst_api_manager.stop()
+        self.on_kst_api_status_changed(False, "商务通 API 已停止")
 
     def choose_kst_installation_root(self) -> None:
         try:

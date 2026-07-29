@@ -163,6 +163,46 @@ def test_kst_path_selections_preserve_the_other_setting_and_rescan(
     window.close()
 
 
+def test_kst_machine_settings_save_failure_keeps_file_and_skips_rescan(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    _write_app_config(tmp_path, "local_api")
+    original_installation = tmp_path / "original-program"
+    original_data = tmp_path / "original-data"
+    save_kst_machine_settings(
+        tmp_path,
+        installation_root=original_installation,
+        data_root=original_data,
+    )
+    settings_path = tmp_path / "runtime" / "kst_machine_settings.json"
+    original_payload = settings_path.read_text(encoding="utf-8")
+    fake = FakeKstApiManager()
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: fake,
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: str(tmp_path / "new-program"),
+    )
+    monkeypatch.setattr(
+        "gui.main_window.save_kst_machine_settings",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("save failed")
+        ),
+    )
+
+    window.choose_kst_installation_root()
+
+    assert settings_path.read_text(encoding="utf-8") == original_payload
+    assert fake.rescan_calls == 0
+    window.stop_kst_api()
+    window.close()
+
+
 def test_export_mode_disables_rescan_without_starting_manager(
     qapp,
     tmp_path,

@@ -122,3 +122,49 @@ def test_mode_switch_stops_and_restarts_manager(qapp, tmp_path):
     assert (fake.stop_calls, fake.start_calls) == (1, 2)
     window.stop_kst_api()
     window.close()
+
+
+def test_switching_to_export_clears_green_api_status(qapp, tmp_path):
+    _set_kst_data_source(tmp_path, "local_api")
+    fake = FakeKstApiManager()
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: fake,
+    )
+    QApplication.processEvents()
+    fake.status_changed.emit(True, "ready")
+    QApplication.processEvents()
+    assert window.kst_status_control.kst_button.property("apiReady") is True
+
+    window.set_global_kst_data_source("export")
+
+    assert window.kst_status_control.kst_button.property("apiReady") is False
+    window.close()
+
+
+def test_mode_save_failure_does_not_change_manager_lifecycle(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    _set_kst_data_source(tmp_path, "local_api")
+    fake = FakeKstApiManager()
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: fake,
+    )
+    QApplication.processEvents()
+    monkeypatch.setattr(
+        "gui.main_window.set_kst_data_source",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("save failed")
+        ),
+    )
+
+    window.set_global_kst_data_source("export")
+
+    assert window.kst_data_source == "local_api"
+    assert (fake.stop_calls, fake.start_calls) == (0, 1)
+    assert window.kst_api_action.isChecked() is True
+    window.stop_kst_api()
+    window.close()

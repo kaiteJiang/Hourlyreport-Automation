@@ -10812,11 +10812,28 @@ def test_desktop_gui_uses_vista_yahei_bold_with_regular_secondary_text(monkeypat
 
 def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow
 
+    class NoopKstApiManager(QObject):
+        status_changed = Signal(bool, str)
+        log_message = Signal(str)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def rescan(self):
+            pass
+
     app = QApplication.instance() or QApplication([])
-    window = MainWindow(Path(__file__).resolve().parents[1])
+    window = MainWindow(
+        Path(__file__).resolve().parents[1],
+        kst_api_manager_factory=lambda *_: NoopKstApiManager(),
+    )
 
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")

@@ -217,7 +217,7 @@ def test_error_change_logs_immediately(qapp, tmp_path):
     [
         (
             "推广 ID 在项目 alpha 与 beta 中重复",
-            "推广 ID 在项目 alpha 与 beta 中重复",
+            "快商通身份映射未就绪",
         ),
         (
             "address already in use",
@@ -225,7 +225,7 @@ def test_error_change_logs_immediately(qapp, tmp_path):
         ),
     ],
 )
-def test_failure_categories_preserve_only_safe_messages(
+def test_failure_categories_use_fixed_messages(
     qapp,
     tmp_path,
     error_message,
@@ -240,6 +240,52 @@ def test_failure_categories_preserve_only_safe_messages(
         wait_for_attempts(attempts, 1)
         assert wait_until(lambda: len(messages) == 1)
         assert messages == [expected_message]
+        assert manager.status_detail() == expected_message
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize(
+    ("error_message", "expected_message"),
+    [
+        (r"\\server\share\SENTINEL_UNC", "商务通本地 API 启动失败"),
+        ("/home/user/SENTINEL_POSIX", "商务通本地 API 启动失败"),
+        ("file:///C:/private/SENTINEL_FILE", "商务通本地 API 启动失败"),
+        ("http://example.invalid/SENTINEL_HTTP", "商务通本地 API 启动失败"),
+        ("token=SENTINEL_TOKEN", "商务通本地 API 认证配置无效"),
+        ("api_key=SENTINEL_API", "商务通本地 API 认证配置无效"),
+        ("secret=SENTINEL_SECRET", "商务通本地 API 认证配置无效"),
+        ("password=SENTINEL_PASSWORD", "商务通本地 API 认证配置无效"),
+        (
+            "authorization: Bearer SENTINEL_AUTH",
+            "商务通本地 API 认证配置无效",
+        ),
+        ("Traceback...\nSENTINEL_TRACE", "商务通本地 API 启动失败"),
+        ("SENTINEL_UNKNOWN", "商务通本地 API 启动失败"),
+    ],
+)
+def test_failure_messages_never_expose_paths_credentials_or_tracebacks(
+    qapp,
+    tmp_path,
+    error_message,
+    expected_message,
+):
+    messages = []
+    statuses = []
+    manager, attempts = failing_manager(tmp_path, [error_message])
+    manager.log_message.connect(messages.append)
+    manager.status_changed.connect(
+        lambda ready, detail: statuses.append((ready, detail))
+    )
+
+    manager.start()
+    try:
+        wait_for_attempts(attempts, 1)
+        assert wait_until(lambda: len(messages) == 1 and len(statuses) == 1)
+        published = "\n".join(messages + [detail for _, detail in statuses])
+        assert "SENTINEL" not in published
+        assert messages == [expected_message]
+        assert statuses == [(False, expected_message)]
         assert manager.status_detail() == expected_message
     finally:
         manager.stop()
@@ -319,6 +365,59 @@ def test_stop_does_not_wait_for_blocked_worker(qapp, tmp_path):
     assert factory_calls == []
 
 
+def test_rapid_restart_never_runs_two_manager_workers(qapp, tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+    counts_lock = threading.Lock()
+    attempts = 0
+    active_workers = 0
+    max_active_workers = 0
+
+    class BlockingRegistry(FakeRegistry):
+        def refresh(self):
+            nonlocal attempts, active_workers, max_active_workers
+            with counts_lock:
+                attempts += 1
+                active_workers += 1
+                max_active_workers = max(max_active_workers, active_workers)
+                entered.set()
+            try:
+                release.wait()
+            finally:
+                with counts_lock:
+                    active_workers -= 1
+
+    server = FakeServer()
+    manager = KstApiManager(
+        tmp_path,
+        registry_factory=BlockingRegistry,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=5_000,
+    )
+    manager.start()
+    assert entered.wait(timeout=1)
+
+    try:
+        started = time.monotonic()
+        manager.stop()
+        assert time.monotonic() - started < 0.1
+        manager.start()
+
+        time.sleep(0.05)
+        with counts_lock:
+            assert attempts == 1
+            assert max_active_workers == 1
+
+        release.set()
+        assert wait_until(lambda: attempts >= 2)
+        with counts_lock:
+            assert max_active_workers == 1
+    finally:
+        release.set()
+        manager.stop()
+
+
 def test_manager_starts_owned_server_and_stops_it(qapp, tmp_path):
     server = FakeServer()
     manager = _manager(
@@ -356,6 +455,37 @@ def test_manager_reuses_external_server_without_stopping_it(qapp, tmp_path):
     assert factory_calls == []
 
 
+def test_stop_discards_queued_ready_from_old_generation(qapp, tmp_path):
+    statuses = []
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: True,
+        server_factory=lambda *_args, **_kwargs: pytest.fail(
+            "external healthy service must not create a server"
+        ),
+    )
+    manager.status_changed.connect(
+        lambda ready, detail: statuses.append((ready, detail))
+    )
+
+    manager.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        worker = manager._worker
+        if worker is None or not worker.is_alive():
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("manager worker did not finish")
+
+    manager.stop()
+    QApplication.processEvents()
+
+    assert statuses == [(False, "商务通 API 已停止")]
+    assert manager.is_ready() is False
+    assert manager.status_detail() == "商务通 API 已停止"
+
+
 def test_failed_start_stays_gray_and_retries(qapp, tmp_path):
     attempts = []
     manager = _manager(
@@ -388,7 +518,9 @@ def test_not_ready_runtime_never_turns_status_green(qapp, tmp_path):
 
     manager.start()
     try:
-        assert wait_until(lambda: "尚未就绪" in manager.status_detail())
+        assert wait_until(
+            lambda: manager.status_detail() == "快商通身份映射未就绪"
+        )
         assert manager.is_ready() is False
         assert factory_calls == []
     finally:
@@ -467,6 +599,55 @@ def test_owned_server_exception_clears_ready_and_ownership(qapp, tmp_path):
         assert wait_until(lambda: server.close_calls == 1)
         assert manager.is_ready() is False
         assert manager.owns_server() is False
+    finally:
+        manager.stop()
+
+
+def test_immediate_server_exit_publishes_failure_after_startup(qapp, tmp_path):
+    statuses = []
+
+    class ShortLivedServer(ExplodingServer):
+        def __init__(self):
+            super().__init__()
+            self.closed = threading.Event()
+
+        def server_close(self):
+            super().server_close()
+            self.closed.set()
+
+    server = ShortLivedServer()
+    manager = _manager(
+        tmp_path,
+        probe=lambda *_: False,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=5_000,
+    )
+    original_queue_status = manager._queue_status
+
+    def expose_immediate_exit_order(generation, ready, detail):
+        if ready and threading.current_thread().name == "kst-api-manager":
+            assert server.closed.wait(timeout=1)
+        original_queue_status(generation, ready, detail)
+
+    manager._queue_status = expose_immediate_exit_order
+    manager.status_changed.connect(
+        lambda ready, detail: statuses.append((ready, detail))
+    )
+
+    manager.start()
+    try:
+        assert server.closed.wait(timeout=1)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            worker = manager._worker
+            if worker is None or not worker.is_alive():
+                break
+            time.sleep(0.01)
+        QApplication.processEvents()
+
+        assert manager.is_ready() is False
+        assert statuses
+        assert statuses[-1] == (False, manager.status_detail())
     finally:
         manager.stop()
 
