@@ -67,7 +67,7 @@ class LegacyKstConversationService:
         promotion_map = self._config["kst"]["promotion_id_accounts"]
         return {
             "账户": promotion_map[conversation.promotion_id],
-            "开始对话时间": conversation.start_time,
+            "对话时间": conversation.start_time,
             "备注说明": f"推广ID：{conversation.promotion_id}",
             "访客消息数": conversation.visitor_messages,
             "名片标签": "、".join(conversation.tags),

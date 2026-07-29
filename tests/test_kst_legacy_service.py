@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+import modules.kst_local.legacy_service as legacy_service_module
 from modules.kst_local.legacy_service import LegacyKstConversationService
 from modules.kst_local.models import LegacyKstInstallation
 from modules.kst_local.service import KstServiceError
@@ -167,6 +168,73 @@ def test_legacy_service_reuses_daily_general_valid_rule(
         "有效转潜": 0,
         "总转潜": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ("aggregate_name", "report_method", "report_args"),
+    [
+        (
+            "aggregate_kst_export_rows",
+            "build_hourly_report",
+            ("2026-07-29", "11点"),
+        ),
+        (
+            "aggregate_kst_daily_rows",
+            "build_daily_report",
+            ("2026-07-29",),
+        ),
+    ],
+)
+def test_legacy_service_passes_exact_normalized_row_to_aggregator(
+    legacy_installation,
+    project_config,
+    monkeypatch,
+    aggregate_name,
+    report_method,
+    report_args,
+):
+    seed_conversation(
+        legacy_installation,
+        rec_id="normalized-row",
+        promotion_id="10001",
+        visitor_messages=3,
+        tags=("有效-三句话", "转潜-有效"),
+    )
+    captured_rows = []
+
+    def capture(rows, _config):
+        captured_rows.append(rows)
+        return {
+            "accounts": {},
+            "summary": {},
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        legacy_service_module,
+        aggregate_name,
+        capture,
+    )
+    service = LegacyKstConversationService(
+        project_config,
+        legacy_installation,
+    )
+
+    getattr(service, report_method)(*report_args)
+
+    assert captured_rows == [
+        [
+            {
+                "账户": "账户A",
+                "对话时间": "2026-07-29 09:10:00",
+                "备注说明": "推广ID：10001",
+                "访客消息数": 3,
+                "名片标签": "有效-三句话、转潜-有效",
+                "搜索关键词": "合成搜索词",
+                "竞价词": "合成竞价词",
+            }
+        ]
+    ]
 
 
 def test_legacy_service_rejects_promotion_id_outside_project(

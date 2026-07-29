@@ -24,6 +24,18 @@ _TAG_SEPARATOR_PATTERN = re.compile(r"[、,，;；|\r\n]+")
 _DATETIME_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]")
 _INTEGER_PATTERN = re.compile(r"-?\d+")
 _HISTORY_CHUNK_SIZE = 500
+_HISTORY_CAPABILITY_QUERY = """
+    SELECT recId, curEnterTime, diaStartTime, visitorSendNum,
+           visitorCustomField, keyword, bidWord, talkGrade,
+           dialogClassification, classifyTag, cusTypeTag, aiTags
+    FROM OC_HDVISITORINFO
+    LIMIT 0
+"""
+_MESSAGE_CAPABILITY_QUERY = """
+    SELECT recId, addTime
+    FROM DIALOGRECORD_VISITOR
+    LIMIT 0
+"""
 
 
 def normalize_legacy_tags(*values: Any) -> tuple[str, ...]:
@@ -133,6 +145,57 @@ def _install_progress_handler(
         )
 
     connection.set_progress_handler(interrupted, 1000)
+
+
+def _validate_database_capability(
+    path: Path,
+    query: str,
+    cancel_event: Any,
+    deadline: float,
+) -> None:
+    _check_interrupted(cancel_event, deadline)
+    database_error = False
+    try:
+        with closing(_connect_read_only(path)) as connection:
+            _install_progress_handler(connection, cancel_event, deadline)
+            connection.execute(query).fetchall()
+            _check_interrupted(cancel_event, deadline)
+    except KstLegacyDatabaseError:
+        raise
+    except (OSError, sqlite3.Error, ValueError):
+        database_error = True
+    if database_error:
+        _check_interrupted(cancel_event, deadline)
+        raise KstLegacyDatabaseError(
+            "老版快商通数据库读取能力不可用"
+        ) from None
+
+
+def validate_legacy_read_capability(
+    installation: LegacyKstInstallation,
+    *,
+    cancel_event: Any = None,
+    deadline_seconds: float = 5.0,
+) -> None:
+    deadline = time.monotonic() + deadline_seconds
+    if not installation.message_database_paths:
+        raise KstLegacyDatabaseError(
+            "老版快商通数据库读取能力不可用"
+        )
+    _validate_database_capability(
+        installation.history_db,
+        _HISTORY_CAPABILITY_QUERY,
+        cancel_event,
+        deadline,
+    )
+    for database_path in installation.message_database_paths:
+        _validate_database_capability(
+            database_path,
+            _MESSAGE_CAPABILITY_QUERY,
+            cancel_event,
+            deadline,
+        )
+    _check_interrupted(cancel_event, deadline)
 
 
 def _read_authorized_rec_ids(

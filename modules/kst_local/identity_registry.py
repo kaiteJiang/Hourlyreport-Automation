@@ -13,11 +13,9 @@ from modules.kst_local.backend import (
     installation_runtime_state,
     read_installation_promotion_ids,
 )
-from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import (
     KstDiscoveryError,
     discover_all_installations,
-    discover_installations,
 )
 from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import (
@@ -26,7 +24,6 @@ from modules.kst_local.models import (
     KstInstallationLike,
     LegacyKstInstallation,
 )
-from modules.kst_local.runtime import build_live_runtime
 from modules.project_config import (
     build_runtime_config_from_project,
     list_projects,
@@ -77,10 +74,6 @@ def _load_formal_projects(root: str | Path) -> list[dict[str, Any]]:
         load_project_config(root, item["project_id"])
         for item in list_projects(root)
     ]
-
-
-def _discover_active_installations() -> list[KstInstallation]:
-    return discover_installations(require_running_process=True)
 
 
 def _required_endpoints_available(

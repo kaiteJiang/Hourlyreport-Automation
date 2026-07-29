@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,7 +15,6 @@ from modules.kst_local.backend import (
     read_installation_promotion_ids,
 )
 from modules.kst_local.discovery import KstDiscoveryError
-from modules.kst_local.legacy_db_reader import KstLegacyDatabaseError
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
     KstAuthContext,
@@ -22,6 +22,44 @@ from modules.kst_local.models import (
     LegacyKstInstallation,
 )
 from modules.kst_local.runtime import LegacyKstRuntime
+
+
+HISTORY_COLUMNS = (
+    "recId TEXT",
+    "curEnterTime TEXT",
+    "diaStartTime TEXT",
+    "visitorSendNum INTEGER",
+    "visitorCustomField TEXT",
+    "keyword TEXT",
+    "bidWord TEXT",
+    "talkGrade TEXT",
+    "dialogClassification TEXT",
+    "classifyTag TEXT",
+    "cusTypeTag TEXT",
+    "aiTags TEXT",
+)
+
+
+def _create_history_database(path, *, columns=HISTORY_COLUMNS) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            "CREATE TABLE OC_HDVISITORINFO "
+            f"({', '.join(columns)})"
+        )
+        connection.commit()
+
+
+def _create_message_database(
+    path,
+    *,
+    columns=("recId TEXT", "addTime TEXT"),
+) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            "CREATE TABLE DIALOGRECORD_VISITOR "
+            f"({', '.join(columns)})"
+        )
+        connection.commit()
 
 
 @pytest.fixture
@@ -44,16 +82,9 @@ def legacy_installation(tmp_path):
     first_live_db = tmp_path / "legacy-db" / "first_CS.pdb"
     second_live_db = tmp_path / "legacy-db" / "second_CS.pdb"
     history_db.parent.mkdir(parents=True)
-    with sqlite3.connect(history_db) as connection:
-        connection.execute(
-            "CREATE TABLE OC_HDVISITORINFO (recId TEXT)"
-        )
+    _create_history_database(history_db)
     for path in (first_live_db, second_live_db):
-        with sqlite3.connect(path) as connection:
-            connection.execute(
-                "CREATE TABLE DIALOGRECORD_VISITOR "
-                "(recId TEXT, addTime TEXT)"
-            )
+        _create_message_database(path)
     root = tmp_path / "legacy"
     return LegacyKstInstallation(
         root=root,
@@ -146,28 +177,90 @@ def test_backend_dispatches_promotion_id_reader(
     assert read_installation_promotion_ids(installation) == expected
 
 
-def test_legacy_readiness_is_true_only_when_read_only_reader_succeeds(
+def test_legacy_readiness_accepts_valid_empty_databases(
     legacy_installation,
-    monkeypatch,
 ):
-    monkeypatch.setattr(
-        backend,
-        "read_legacy_promotion_ids",
-        lambda _item: set(),
-    )
     assert installation_ready(
         legacy_installation,
         "2026-07-29",
     ) is True
 
-    def fail(_item):
-        raise KstLegacyDatabaseError("合成读取失败")
 
-    monkeypatch.setattr(backend, "read_legacy_promotion_ids", fail)
+@pytest.mark.parametrize(
+    "invalid_case",
+    [
+        "missing_history",
+        "corrupt_history",
+        "missing_history_table",
+        "missing_history_column",
+        "missing_message_table",
+        "missing_message_column",
+    ],
+)
+def test_legacy_readiness_and_health_reject_invalid_declared_database(
+    legacy_installation,
+    tmp_path,
+    invalid_case,
+):
+    invalid_path = tmp_path / f"{invalid_case}.db"
+    invalid_installation = legacy_installation
+    if invalid_case == "missing_history":
+        invalid_installation = replace(
+            legacy_installation,
+            history_db=invalid_path,
+        )
+    elif invalid_case == "corrupt_history":
+        invalid_path.write_bytes(b"not-a-sqlite-database")
+        invalid_installation = replace(
+            legacy_installation,
+            history_db=invalid_path,
+        )
+    elif invalid_case == "missing_history_table":
+        with closing(sqlite3.connect(invalid_path)) as connection:
+            connection.execute("CREATE TABLE OTHER_TABLE (id INTEGER)")
+            connection.commit()
+        invalid_installation = replace(
+            legacy_installation,
+            history_db=invalid_path,
+        )
+    elif invalid_case == "missing_history_column":
+        _create_history_database(
+            invalid_path,
+            columns=HISTORY_COLUMNS[:-1],
+        )
+        invalid_installation = replace(
+            legacy_installation,
+            history_db=invalid_path,
+        )
+    elif invalid_case == "missing_message_table":
+        with closing(sqlite3.connect(invalid_path)) as connection:
+            connection.execute("CREATE TABLE OTHER_TABLE (id INTEGER)")
+            connection.commit()
+        invalid_installation = replace(
+            legacy_installation,
+            message_database_paths=(invalid_path,),
+        )
+    elif invalid_case == "missing_message_column":
+        _create_message_database(
+            invalid_path,
+            columns=("recId TEXT",),
+        )
+        invalid_installation = replace(
+            legacy_installation,
+            message_database_paths=(invalid_path,),
+        )
+
     assert installation_ready(
-        legacy_installation,
+        invalid_installation,
         "2026-07-29",
     ) is False
+    runtime = LegacyKstRuntime(
+        installation=invalid_installation,
+        service=object(),
+    )
+    health = runtime.health()
+    assert health["status"] == "not_ready"
+    assert health["read_only_database_available"] is False
 
 
 def test_legacy_runtime_state_tracks_every_database(

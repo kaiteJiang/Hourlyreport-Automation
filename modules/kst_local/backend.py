@@ -5,7 +5,10 @@ from typing import Any
 
 from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import KstDiscoveryError
-from modules.kst_local.legacy_db_reader import read_legacy_promotion_ids
+from modules.kst_local.legacy_db_reader import (
+    read_legacy_promotion_ids,
+    validate_legacy_read_capability,
+)
 from modules.kst_local.legacy_service import LegacyKstConversationService
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
@@ -76,7 +79,7 @@ def installation_ready(
 ) -> bool:
     if isinstance(installation, LegacyKstInstallation):
         try:
-            read_legacy_promotion_ids(installation)
+            validate_legacy_read_capability(installation)
         except Exception:
             return False
         return True
