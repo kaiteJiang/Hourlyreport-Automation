@@ -69,7 +69,7 @@ class KstApiManager(QObject):
     status_changed = Signal(bool, str)
     log_message = Signal(str)
     _retry_requested = Signal(int, int)
-    _worker_finished = Signal(int)
+    _worker_finished = Signal(int, object)
     _status_requested = Signal(int, bool, str)
 
     def __init__(
@@ -92,6 +92,10 @@ class KstApiManager(QObject):
         self._registry: Any | None = None
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
+        self._worker_generation: int | None = None
+        self._retiring_worker_restart: (
+            tuple[threading.Thread, int, int] | None
+        ) = None
         self._server_thread: threading.Thread | None = None
         self._server: Any | None = None
         self._owns_server = False
@@ -146,6 +150,7 @@ class KstApiManager(QObject):
             self._generation += 1
             self._cancel_event = threading.Event()
             self._rescan_pending = False
+            self._retiring_worker_restart = None
             self._retry_index = 0
             self._last_error_key = None
             self._last_error_log_at = None
@@ -161,6 +166,7 @@ class KstApiManager(QObject):
             self._stopping = True
             self._generation += 1
             self._cancel_event.set()
+            self._retiring_worker_restart = None
             server = self._server if self._owns_server else None
             self._server = None
             self._server_thread = None
@@ -267,6 +273,16 @@ class KstApiManager(QObject):
             if not self._started or self._stopping:
                 return
             if self._worker is not None and self._worker.is_alive():
+                worker_generation = self._worker_generation
+                if (
+                    worker_generation is not None
+                    and worker_generation != self._generation
+                ):
+                    self._retiring_worker_restart = (
+                        self._worker,
+                        worker_generation,
+                        self._generation,
+                    )
                 return
             target = (
                 self._refresh_owned_registry
@@ -281,6 +297,8 @@ class KstApiManager(QObject):
                 name="kst-api-manager",
                 daemon=True,
             )
+            self._worker_generation = generation
+            self._retiring_worker_restart = None
             worker = self._worker
         worker.start()
 
@@ -299,6 +317,7 @@ class KstApiManager(QObject):
             with self._lock:
                 if self._worker is current:
                     self._worker = None
+                    self._worker_generation = None
                 if self._is_active_locked(generation, cancel_event):
                     immediate = self._rescan_pending
                     self._rescan_pending = False
@@ -306,19 +325,29 @@ class KstApiManager(QObject):
                 self._retry_requested.emit(0, generation)
             elif delay_ms is not None:
                 self._retry_requested.emit(delay_ms, generation)
-            self._worker_finished.emit(generation)
+            self._worker_finished.emit(generation, current)
 
-    def _on_worker_finished(self, generation: int) -> None:
+    def _on_worker_finished(
+        self,
+        generation: int,
+        worker: threading.Thread,
+    ) -> None:
         with self._lock:
+            token = self._retiring_worker_restart
             should_start_current_generation = (
                 self._started
                 and not self._stopping
-                and generation != self._generation
+                and token is not None
+                and token[0] is worker
+                and token[1] == generation
+                and token[2] == self._generation
                 and (
                     self._worker is None
                     or not self._worker.is_alive()
                 )
             )
+            if should_start_current_generation:
+                self._retiring_worker_restart = None
         if should_start_current_generation:
             self._ensure_service_async()
 

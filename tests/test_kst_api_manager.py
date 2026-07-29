@@ -418,6 +418,47 @@ def test_rapid_restart_never_runs_two_manager_workers(qapp, tmp_path):
         manager.stop()
 
 
+def test_delayed_old_worker_finished_does_not_bypass_current_backoff(
+    qapp,
+    tmp_path,
+):
+    manager, attempts = failing_manager(
+        tmp_path,
+        ["客户端未运行"],
+    )
+
+    def wait_without_qt_events(predicate, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        return False
+
+    manager.start()
+    try:
+        assert wait_without_qt_events(
+            lambda: len(attempts) == 1
+            and (manager._worker is None or not manager._worker.is_alive())
+        )
+
+        manager.stop()
+        manager.start()
+        assert wait_without_qt_events(
+            lambda: len(attempts) == 2
+            and (manager._worker is None or not manager._worker.is_alive())
+        )
+
+        QApplication.processEvents()
+        time.sleep(0.05)
+
+        assert attempts == [1, 1]
+        assert manager._retry_timer.isActive() is True
+        assert manager._retry_timer.interval() == 5_000
+    finally:
+        manager.stop()
+
+
 def test_manager_starts_owned_server_and_stops_it(qapp, tmp_path):
     server = FakeServer()
     manager = _manager(
