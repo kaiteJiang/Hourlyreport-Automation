@@ -14,6 +14,7 @@ from modules.kst_local.models import (
     AutomaticSourceSnapshot,
     KstAuthContext,
     KstInstallation,
+    LegacyKstInstallation,
 )
 
 
@@ -51,6 +52,26 @@ def installation(tmp_path: Path, identity: str) -> KstInstallation:
         log_dir=tmp_path / "log" / identity,
         database_paths=(tmp_path / "db" / identity / "VISITOR.db",),
         sqlite_module_dir=root / "resources" / "app" / "node_modules" / "sqlite",
+    )
+
+
+def legacy_installation(
+    tmp_path: Path,
+    identity: str,
+) -> LegacyKstInstallation:
+    root = tmp_path / "legacy-app"
+    return LegacyKstInstallation(
+        root=root,
+        executable=root / "OnlineCS.exe",
+        version="7.03.17",
+        identity=identity,
+        log_dir=tmp_path / "legacy-log" / identity,
+        data_root=tmp_path / "legacy-db",
+        history_db=tmp_path / "legacy-db" / f"{identity}_HIS.cdb",
+        message_database_paths=(
+            tmp_path / "legacy-db" / identity / "first_CS.pdb",
+            tmp_path / "legacy-db" / identity / "second_CS.pdb",
+        ),
     )
 
 
@@ -411,3 +432,128 @@ def test_registry_caches_promotion_ids_until_ttl_expires(tmp_path):
     now[0] += 301
     registry.refresh()
     assert calls == ["id-a", "id-a"]
+
+
+def test_registry_default_loader_uses_combined_discovery(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        registry_module,
+        "discover_all_installations",
+        lambda root, **kwargs: (
+            calls.append((Path(root), kwargs))
+            or []
+        ),
+    )
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [],
+    )
+
+    registry.refresh()
+
+    assert calls == [
+        (
+            tmp_path,
+            {"require_running_process": True},
+        )
+    ]
+
+
+def test_registry_builds_legacy_without_electron_snapshot(tmp_path):
+    item = legacy_installation(tmp_path, "legacy-id")
+    snapshots = []
+    runtime = object()
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project(
+            "a",
+            ["10001"],
+        ),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=lambda *_args, **kwargs: (
+            snapshots.append(("runtime", kwargs["snapshot"]))
+            or runtime
+        ),
+        runtime_state_reader=lambda *_args: (
+            snapshots.append(("state", _args[2]))
+            or "legacy-state"
+        ),
+        endpoint_checker=lambda *_args: True,
+    )
+    registry.refresh()
+
+    assert registry.build_runtime("a", "2026-07-29") is runtime
+    assert snapshots == [
+        ("state", None),
+        ("runtime", None),
+    ]
+
+
+def test_registry_still_parses_electron_snapshot_before_build(
+    tmp_path,
+    monkeypatch,
+):
+    item = installation(tmp_path, "electron-id")
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={},
+        auth=KstAuthContext(),
+    )
+    snapshots = []
+    monkeypatch.setattr(
+        registry_module,
+        "parse_cached_log_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project(
+            "a",
+            ["10001"],
+        ),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=lambda *_args, **kwargs: (
+            snapshots.append(("runtime", kwargs["snapshot"]))
+            or object()
+        ),
+        runtime_state_reader=lambda *_args: (
+            snapshots.append(("state", _args[2]))
+            or "electron-state"
+        ),
+        endpoint_checker=lambda *_args: True,
+    )
+    registry.refresh()
+
+    registry.build_runtime("a", "2026-07-29")
+
+    assert snapshots == [
+        ("state", snapshot),
+        ("runtime", snapshot),
+    ]
+
+
+def test_installation_cache_key_includes_family_and_all_databases(
+    tmp_path,
+):
+    electron = installation(tmp_path, "shared-id")
+    legacy = legacy_installation(tmp_path, "shared-id")
+
+    electron_key = KstIdentityRegistry._installation_cache_key(
+        electron
+    )
+    legacy_key = KstIdentityRegistry._installation_cache_key(legacy)
+
+    assert electron_key[0] == "electron"
+    assert legacy_key[0] == "legacy_java"
+    assert legacy_key[-1] == (
+        str(legacy.history_db),
+        *(str(path) for path in legacy.message_database_paths),
+    )

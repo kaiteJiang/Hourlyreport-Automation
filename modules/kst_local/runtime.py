@@ -9,8 +9,13 @@ from typing import Any
 from modules.kst_local.api_client import KstApiClient
 from modules.kst_local.db_reader import read_cache_candidates
 from modules.kst_local.discovery import discover_installation
+from modules.kst_local.legacy_db_reader import read_legacy_promotion_ids
 from modules.kst_local.log_source import parse_cached_log_snapshot
-from modules.kst_local.models import AutomaticSourceSnapshot, KstInstallation
+from modules.kst_local.models import (
+    AutomaticSourceSnapshot,
+    KstInstallation,
+    LegacyKstInstallation,
+)
 from modules.kst_local.service import KstConversationService
 
 
@@ -34,6 +39,33 @@ class KstLiveRuntime:
             "installation": self.installation.safe_diagnostics(),
             "automatic_sources": self.snapshot.safe_diagnostics(),
             "required_endpoints_available": required_endpoints_available,
+        }
+
+
+@dataclass(frozen=True)
+class LegacyKstRuntime:
+    installation: LegacyKstInstallation
+    service: Any
+
+    def health(self) -> dict[str, Any]:
+        database_paths = (
+            self.installation.history_db,
+            *self.installation.message_database_paths,
+        )
+        ready = all(path.is_file() for path in database_paths)
+        if ready:
+            try:
+                read_legacy_promotion_ids(self.installation)
+            except Exception:
+                ready = False
+        return {
+            "status": "ok" if ready else "not_ready",
+            "installation": self.installation.safe_diagnostics(),
+            "automatic_sources": {
+                "source_type": "legacy_live_database",
+            },
+            "required_endpoints_available": ready,
+            "read_only_database_available": ready,
         }
 
 

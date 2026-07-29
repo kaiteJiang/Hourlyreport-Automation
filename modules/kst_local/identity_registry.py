@@ -7,10 +7,25 @@ import threading
 import time
 from typing import Any, Callable
 
+from modules.kst_local.backend import (
+    build_installation_runtime,
+    installation_ready,
+    installation_runtime_state,
+    read_installation_promotion_ids,
+)
 from modules.kst_local.db_reader import read_identity_promotion_ids
-from modules.kst_local.discovery import discover_installations
+from modules.kst_local.discovery import (
+    KstDiscoveryError,
+    discover_all_installations,
+    discover_installations,
+)
 from modules.kst_local.log_source import parse_cached_log_snapshot
-from modules.kst_local.models import AutomaticSourceSnapshot, KstInstallation
+from modules.kst_local.models import (
+    AutomaticSourceSnapshot,
+    KstInstallation,
+    KstInstallationLike,
+    LegacyKstInstallation,
+)
 from modules.kst_local.runtime import build_live_runtime
 from modules.project_config import (
     build_runtime_config_from_project,
@@ -120,16 +135,26 @@ class KstIdentityRegistry:
         root: str | Path,
         *,
         projects_loader: Callable[[str | Path], list[dict[str, Any]]] = _load_formal_projects,
-        installations_loader: Callable[[], list[KstInstallation]] = _discover_active_installations,
-        promotion_id_reader: Callable[[KstInstallation], set[str]] = read_identity_promotion_ids,
+        installations_loader: Callable[
+            [], list[KstInstallationLike]
+        ] | None = None,
+        promotion_id_reader: Callable[
+            [KstInstallationLike], set[str]
+        ] = read_installation_promotion_ids,
         project_loader: Callable[[str | Path, str], dict[str, Any]] = load_project_config,
         config_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] = build_runtime_config_from_project,
-        runtime_builder: Callable[..., Any] = build_live_runtime,
+        runtime_builder: Callable[..., Any] = build_installation_runtime,
         runtime_state_reader: Callable[
-            [KstInstallation, str, AutomaticSourceSnapshot],
+            [
+                KstInstallationLike,
+                str,
+                AutomaticSourceSnapshot | None,
+            ],
             Any,
-        ] = _runtime_input_state,
-        endpoint_checker: Callable[[KstInstallation, str], bool] = _required_endpoints_available,
+        ] = installation_runtime_state,
+        endpoint_checker: Callable[
+            [KstInstallationLike, str], bool
+        ] = installation_ready,
         promotion_cache_ttl_seconds: float = 300,
         runtime_cache_ttl_seconds: float = 60,
         runtime_cache_max_entries: int = 64,
@@ -137,7 +162,12 @@ class KstIdentityRegistry:
     ) -> None:
         self.root = Path(root)
         self._projects_loader = projects_loader
-        self._installations_loader = installations_loader
+        self._installations_loader = installations_loader or (
+            lambda: discover_all_installations(
+                self.root,
+                require_running_process=True,
+            )
+        )
         self._promotion_id_reader = promotion_id_reader
         self._project_loader = project_loader
         self._config_builder = config_builder
@@ -165,11 +195,11 @@ class KstIdentityRegistry:
             tuple[float, Any, Any],
         ] = OrderedDict()
         self._promotion_cache: dict[
-            tuple[str, str, tuple[str, ...]],
+            tuple[str, str, str, tuple[str, ...]],
             tuple[float, frozenset[str]],
         ] = {}
         self._projects: dict[str, dict[str, Any]] = {}
-        self._bindings: dict[str, KstInstallation] = {}
+        self._bindings: dict[str, KstInstallationLike] = {}
         self._project_errors: dict[str, str] = {}
         self._identity_error_count = 0
         self._identity_count = 0
@@ -177,17 +207,29 @@ class KstIdentityRegistry:
 
     @staticmethod
     def _installation_cache_key(
-        installation: KstInstallation,
-    ) -> tuple[str, str, tuple[str, ...]]:
+        installation: KstInstallationLike,
+    ) -> tuple[str, str, str, tuple[str, ...]]:
+        if isinstance(installation, LegacyKstInstallation):
+            family = installation.client_family
+            database_paths = (
+                installation.history_db,
+                *installation.message_database_paths,
+            )
+        elif isinstance(installation, KstInstallation):
+            family = "electron"
+            database_paths = installation.database_paths
+        else:
+            raise KstDiscoveryError("不支持的快商通客户端结构")
         return (
+            family,
             str(installation.root),
             installation.identity,
-            tuple(str(path) for path in installation.database_paths),
+            tuple(str(path) for path in database_paths),
         )
 
     def _promotion_ids_for(
         self,
-        installation: KstInstallation,
+        installation: KstInstallationLike,
     ) -> set[str]:
         key = self._installation_cache_key(installation)
         now = self._monotonic()
@@ -214,11 +256,14 @@ class KstIdentityRegistry:
         }
         promotion_index = build_project_promotion_index(projects)
         installations = self._installations_loader()
-        bindings: dict[str, KstInstallation] = {}
+        bindings: dict[str, KstInstallationLike] = {}
         project_errors: dict[str, str] = {}
         identity_error_count = 0
 
-        candidates: dict[str, list[KstInstallation]] = defaultdict(list)
+        candidates: dict[
+            str,
+            list[KstInstallationLike],
+        ] = defaultdict(list)
         conflicted_projects: set[str] = set()
         unready_projects: set[str] = set()
         target_date = date.today().isoformat()
@@ -272,14 +317,17 @@ class KstIdentityRegistry:
                         if key[0] in changed_projects:
                             self._runtime_cache.pop(key, None)
 
-    def installation_for(self, project_id: str) -> KstInstallation:
+    def installation_for(
+        self,
+        project_id: str,
+    ) -> KstInstallationLike:
         with self._state_lock:
             return self._installation_for_unlocked(project_id)
 
     def _installation_for_unlocked(
         self,
         project_id: str,
-    ) -> KstInstallation:
+    ) -> KstInstallationLike:
         if not self._refreshed:
             raise KstIdentityMappingError("快商通身份注册表尚未刷新")
         installation = self._bindings.get(project_id)
@@ -301,11 +349,13 @@ class KstIdentityRegistry:
     ) -> Any:
         installation = self._installation_for_unlocked(project_id)
         project = self._project_loader(self.root, project_id)
-        snapshot = parse_cached_log_snapshot(
-            installation.log_dir,
-            target_date,
-            auth_date=date.today().isoformat(),
-        )
+        snapshot: AutomaticSourceSnapshot | None = None
+        if isinstance(installation, KstInstallation):
+            snapshot = parse_cached_log_snapshot(
+                installation.log_dir,
+                target_date,
+                auth_date=date.today().isoformat(),
+            )
         state = (
             project,
             self._runtime_state_reader(
