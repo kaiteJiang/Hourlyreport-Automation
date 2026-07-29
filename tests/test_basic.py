@@ -9335,8 +9335,27 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     )
     # 仅用临时占位文件验证扩展名过滤；不创建或提交真实数据库。
     (root / "legacy.db").write_text("not-a-database", encoding="utf-8")
-    (root / "legacy.cdb").write_text("not-a-database", encoding="utf-8")
-    (root / "legacy.pdb").write_text("not-a-database", encoding="utf-8")
+    (root / "legacy.CdB").write_text("not-a-database", encoding="utf-8")
+    (root / "legacy.PdB").write_text("not-a-database", encoding="utf-8")
+    (root / "nested").mkdir()
+    (root / "nested" / "customer.DB").write_text(
+        "not-a-database",
+        encoding="utf-8",
+    )
+    protected_files = (
+        "configs/app_config.json",
+        "secrets/secrets.json",
+        "logs/run.log",
+        "reports/run.json",
+        "backups/report.xlsx",
+        "browser_profile/Profile/data",
+        "kst_exports/manual.csv",
+        "diagnostics/bundle.json",
+    )
+    for relative in protected_files:
+        protected = root / relative
+        protected.parent.mkdir(parents=True, exist_ok=True)
+        protected.write_text("private", encoding="utf-8")
     artifact_dir = (
         root / "build" / "release_2026.7.27.113_staging"
     )
@@ -9368,9 +9387,12 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     assert not any(name.startswith("logs/") for name in names)
     assert not any(name.startswith("reports/") for name in names)
     assert not any(name.startswith("runtime/") for name in names)
-    assert not any(name.endswith((".db", ".cdb", ".pdb")) for name in names)
+    assert not any(name.lower().endswith((".db", ".cdb", ".pdb")) for name in names)
     assert not any(name.startswith("backups/") for name in names)
     assert not any(name.startswith("browser_profile/") for name in names)
+    assert not any(name.startswith("kst_exports/") for name in names)
+    assert not any(name.startswith("diagnostics/") for name in names)
+    assert all("\\" not in name for name in names)
     assert not any(name.endswith(".lock") for name in names)
 
 
@@ -9528,6 +9550,20 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     )
     (tmp_path / "install_env.bat").write_text("@echo off\r\n", encoding="ascii")
     (tmp_path / "requirements-runtime.txt").write_text("openpyxl\n", encoding="utf-8")
+    # 仅用临时占位文件验证首次安装包过滤；不创建或提交真实数据库。
+    nested_database = tmp_path / "nested" / "customer.DB"
+    nested_database.parent.mkdir()
+    nested_database.write_text("not-a-database", encoding="utf-8")
+    (tmp_path / "legacy.CdB").write_text("not-a-database", encoding="utf-8")
+    (tmp_path / "legacy.PdB").write_text("not-a-database", encoding="utf-8")
+    for relative in (
+        "runtime/kst_local_api_token",
+        "kst_exports/manual.csv",
+        "diagnostics/bundle.json",
+    ):
+        private = tmp_path / relative
+        private.parent.mkdir(parents=True, exist_ok=True)
+        private.write_text("private", encoding="utf-8")
     write_build_manifest(
         tmp_path,
         artifact_dir / "hourlyreport_automation.exe",
@@ -9554,6 +9590,11 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     assert "secrets/secrets.json" not in names
     assert "install_env.bat" in names
     assert "requirements-runtime.txt" in names
+    assert not any(name.lower().endswith((".db", ".cdb", ".pdb")) for name in names)
+    assert not any(name.startswith("runtime/") for name in names)
+    assert not any(name.startswith("kst_exports/") for name in names)
+    assert not any(name.startswith("diagnostics/") for name in names)
+    assert all("\\" not in name for name in names)
 
 
 def test_windows_installer_definition_allows_path_selection_and_preserves_user_data():

@@ -14,7 +14,7 @@ DESKTOP_EXE = "hourlyreport_automation.exe"
 DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth", ".db", ".cdb", ".pdb"}
 EXCLUDE_FILES = {
     "config.json",
     "credentials.local.json",
@@ -120,8 +120,6 @@ def should_include_file(
     if online_update and parts and parts[0] in {
         "configs", "secrets", "reports", "logs", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"
     }:
-        return False
-    if online_update and path.suffix.lower() in {".db", ".cdb", ".pdb"}:
         return False
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
