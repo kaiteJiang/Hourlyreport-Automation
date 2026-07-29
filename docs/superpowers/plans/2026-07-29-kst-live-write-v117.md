@@ -128,4 +128,3 @@ git commit -m "fix: expose KST path recovery controls"
 - [ ] **Step 5: 审查、合并、推送与本地同步**
 
 审查通过后合并 `main`，保留主工作区本机配置，推送 GitHub，并将验证过的 v117 EXE 同步到开发目录根部。
-
