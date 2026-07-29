@@ -539,7 +539,7 @@ def test_registry_evicts_old_runtime_dates(tmp_path):
     assert calls == [1, 1, 1, 1]
 
 
-def test_registry_requires_refresh_when_electron_database_wal_changes(
+def test_registry_rebuilds_runtime_when_electron_database_wal_changes(
     tmp_path,
 ):
     database = tmp_path / "db" / "id-a" / "VISITOR.db"
@@ -559,12 +559,9 @@ def test_registry_requires_refresh_when_electron_database_wal_changes(
     first = registry.build_runtime("a", "2026-07-27")
     database.with_name(database.name + "-wal").write_bytes(b"new rows")
 
-    assert registry.health()["status"] == "not_ready"
-    with pytest.raises(KstIdentityMappingError):
-        registry.build_runtime("a", "2026-07-27")
-
-    registry.refresh(force=True)
+    assert registry.health()["status"] == "ok"
     second = registry.build_runtime("a", "2026-07-27")
+
     assert second is not first
     assert calls == [1, 1]
 
@@ -672,6 +669,56 @@ def test_electron_refresh_captures_new_database_with_static_discovery_result(
     assert tuple(
         path.name for path in bound.database_paths
     ) == ("VISITOR.db", "VISITOR_2.db")
+
+
+def test_electron_live_write_during_refresh_keeps_binding_ready(
+    tmp_path,
+):
+    item = installation(tmp_path, "id-a")
+    item.database_paths[0].parent.mkdir(parents=True)
+    item.database_paths[0].write_bytes(b"initial database")
+
+    def read_ids(_current):
+        with item.database_paths[0].open("ab") as database:
+            database.write(b"\nlive client write")
+        return {"10001"}
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=read_ids,
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+
+    registry.refresh()
+
+    assert registry.health()["status"] == "ok"
+    assert registry.installation_for("a").identity == "id-a"
+
+
+def test_electron_live_write_after_refresh_keeps_binding_ready(
+    tmp_path,
+):
+    item = installation(tmp_path, "id-a")
+    item.database_paths[0].parent.mkdir(parents=True)
+    item.database_paths[0].write_bytes(b"initial database")
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _current: {"10001"},
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    registry.refresh()
+
+    with item.database_paths[0].open("ab") as database:
+        database.write(b"\nlive client write")
+
+    assert registry.health()["status"] == "ok"
+    assert registry.installation_for("a").identity == "id-a"
 
 
 def test_registry_with_no_binding_is_not_healthy(tmp_path):

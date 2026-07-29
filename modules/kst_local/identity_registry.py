@@ -73,6 +73,24 @@ def _safe_failure(error: BaseException) -> tuple[str, str]:
     return category, _SAFE_FAILURE_DETAILS[category]
 
 
+def _identity_fingerprints_match(
+    installation: KstInstallationLike | None,
+    baseline: Any,
+    current: Any,
+) -> bool:
+    if (
+        isinstance(installation, KstInstallation)
+        and isinstance(baseline, tuple)
+        and isinstance(current, tuple)
+        and len(baseline) >= 5
+        and len(current) >= 5
+        and baseline[0] == "electron"
+        and current[0] == "electron"
+    ):
+        return baseline[:4] == current[:4]
+    return baseline == current
+
+
 def _call_with_supported_keywords(
     function: Callable[..., Any],
     *args: Any,
@@ -440,7 +458,11 @@ class KstIdentityRegistry:
                 )
                 if (
                     discovered_fingerprint is not None
-                    and discovered_fingerprint != fingerprint_before
+                    and not _identity_fingerprints_match(
+                        installation,
+                        discovered_fingerprint,
+                        fingerprint_before,
+                    )
                 ):
                     raise KstDiscoveryError(
                         "快商通身份数据库在发现期间发生变化",
@@ -477,7 +499,11 @@ class KstIdentityRegistry:
                     installation,
                     cancel_event=cancel_event,
                 )
-                if fingerprint_before != fingerprint_after:
+                if not _identity_fingerprints_match(
+                    installation_after,
+                    fingerprint_before,
+                    fingerprint_after,
+                ):
                     raise KstDiscoveryError(
                         "快商通身份数据库读取期间发生变化",
                         category="database_busy_or_timeout",
@@ -537,8 +563,14 @@ class KstIdentityRegistry:
                 if (
                     self._bindings.get(project_id)
                     != bindings.get(project_id)
-                    or self._binding_fingerprints.get(project_id)
-                    != binding_fingerprints.get(project_id)
+                    or not _identity_fingerprints_match(
+                        (
+                            bindings.get(project_id)
+                            or self._bindings.get(project_id)
+                        ),
+                        self._binding_fingerprints.get(project_id),
+                        binding_fingerprints.get(project_id),
+                    )
                 )
             }
             self._projects = project_map
@@ -618,7 +650,11 @@ class KstIdentityRegistry:
                 detail,
                 category=category,
             ) from None
-        if current != baseline:
+        if not _identity_fingerprints_match(
+            captured,
+            baseline,
+            current,
+        ):
             error = KstIdentityMappingError(
                 "快商通身份数据库已变化，必须重新扫描"
             )
