@@ -24,6 +24,59 @@ class KstDiscoveryError(RuntimeError):
         self.category = category
 
 
+_DISCOVERY_ERROR_PRIORITY = {
+    "database_busy_or_timeout": 900,
+    "database_incompatible": 800,
+    "identity_mapping": 700,
+    "inactive_log": 600,
+    "client_path_mismatch": 500,
+    "client_not_running": 450,
+    "data_root": 300,
+    "installation_root": 200,
+    "discovery_failed": 100,
+}
+
+_DISCOVERY_SAFE_DETAILS = {
+    "database_busy_or_timeout": "数据库忙或读取超时",
+    "database_incompatible": "数据库结构不兼容",
+    "identity_mapping": "快商通身份映射未就绪",
+    "inactive_log": "未检测到活动身份",
+    "client_path_mismatch": "客户端程序与运行进程不匹配",
+    "client_not_running": "客户端未运行",
+    "data_root": "快商通数据目录无效",
+    "installation_root": "快商通客户端目录无效",
+    "discovery_failed": "快商通客户端发现失败",
+}
+
+
+def most_specific_discovery_error(
+    errors: Iterable[BaseException],
+    *,
+    fallback_category: str = "installation_root",
+) -> KstDiscoveryError:
+    typed_errors: list[tuple[int, int, str]] = []
+    for index, error in enumerate(errors):
+        category = str(
+            getattr(error, "category", "discovery_failed")
+        ).strip()
+        if category not in _DISCOVERY_ERROR_PRIORITY:
+            category = "discovery_failed"
+        typed_errors.append(
+            (_DISCOVERY_ERROR_PRIORITY[category], -index, category)
+        )
+    category = (
+        max(typed_errors)[2]
+        if typed_errors
+        else fallback_category
+    )
+    if category not in _DISCOVERY_SAFE_DETAILS:
+        category = "installation_root"
+    return KstDiscoveryError(
+        _DISCOVERY_SAFE_DETAILS[category],
+        category=category,
+    )
+
+
 def _active_log_max_age_seconds() -> float:
     raw = os.environ.get("KST_ACTIVE_LOG_MAX_AGE_SECONDS", "300")
     try:
@@ -92,14 +145,23 @@ def _validate_root(root: Path) -> tuple[Path, Path, Path, str]:
     ]
     electron = next((path for path in executables if path.is_file()), None)
     if not package_path.is_file() or electron is None or not sqlite_module.is_dir():
-        raise KstDiscoveryError(f"目录不具备商务通读取能力：{resolved}")
+        raise KstDiscoveryError(
+            f"目录不具备商务通读取能力：{resolved}",
+            category="installation_root",
+        )
     try:
         package = json.loads(package_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise KstDiscoveryError(f"无法读取商务通版本信息：{package_path}") from exc
+        raise KstDiscoveryError(
+            f"无法读取商务通版本信息：{package_path}",
+            category="installation_root",
+        ) from exc
     version = str(package.get("version") or "").strip()
     if not version:
-        raise KstDiscoveryError(f"商务通版本字段为空：{package_path}")
+        raise KstDiscoveryError(
+            f"商务通版本字段为空：{package_path}",
+            category="installation_root",
+        )
     return resolved, electron.resolve(), sqlite_module.resolve(), version
 
 
@@ -190,9 +252,13 @@ def _resolve_installation_root(
         except KstDiscoveryError as exc:
             if root_source == "environment":
                 raise KstDiscoveryError(
-                    f"KST_INSTALLATION_ROOT 配置无效：{exc}"
+                    f"KST_INSTALLATION_ROOT 配置无效：{exc}",
+                    category="installation_root",
                 ) from exc
-            raise KstDiscoveryError(f"显式配置的商务通根目录无效：{exc}") from exc
+            raise KstDiscoveryError(
+                f"显式配置的商务通根目录无效：{exc}",
+                category="installation_root",
+            ) from exc
     else:
         attempts: list[str] = []
         resolved_values = None
@@ -204,7 +270,9 @@ def _resolve_installation_root(
                 attempts.append(str(candidate))
         if resolved_values is None:
             raise KstDiscoveryError(
-                "未自动发现商务通安装目录；已检查：" + "；".join(attempts)
+                "未自动发现商务通安装目录；已检查："
+                + "；".join(attempts),
+                category="installation_root",
             )
         root, electron, sqlite_module, version = resolved_values
     return root, electron, sqlite_module, version
@@ -221,24 +289,35 @@ def discover_installations(
         explicit_root
     )
     if require_running_process and not process_checker(electron):
-        raise KstDiscoveryError("未检测到正在运行的商务通客户端进程")
+        raise KstDiscoveryError(
+            "未检测到正在运行的商务通客户端进程",
+            category="client_not_running",
+        )
     local_root = Path(
         local_app_data
         if local_app_data is not None
         else os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
     ).expanduser().resolve()
-    candidates = _identity_candidates(
-        local_root,
-        active_within_seconds=(
-            _active_log_max_age_seconds()
-            if active_within_seconds is None
-            else active_within_seconds
-        ),
+    all_candidates = _identity_candidates(local_root)
+    active_age = (
+        _active_log_max_age_seconds()
+        if active_within_seconds is None
+        else active_within_seconds
     )
+    candidates = [
+        item
+        for item in all_candidates
+        if time.time() - item[0] <= active_age
+    ]
     if not candidates:
         data_root = local_root / "OnlineWebCSNew"
         raise KstDiscoveryError(
-            f"未找到同时具有日志和 VISITOR.db 的商务通身份目录：{data_root}"
+            f"未找到同时具有日志和 VISITOR.db 的商务通身份目录：{data_root}",
+            category=(
+                "inactive_log"
+                if all_candidates
+                else "data_root"
+            ),
         )
     return [
         KstInstallation(
@@ -310,6 +389,7 @@ def discover_all_installations(
     )
     legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
+    discovery_errors: list[KstDiscoveryError] = []
     if not is_explicit_legacy_root:
         try:
             installations.extend(
@@ -318,9 +398,10 @@ def discover_all_installations(
                     require_running_process=require_running_process,
                 )
             )
-        except KstDiscoveryError:
+        except KstDiscoveryError as exc:
             if electron_explicit_root is not None:
                 raise
+            discovery_errors.append(exc)
     if configured_root is None or is_explicit_legacy_root:
         try:
             installations.extend(
@@ -331,11 +412,14 @@ def discover_all_installations(
                     cancel_event=cancel_event,
                 )
             )
-        except KstDiscoveryError:
+        except KstDiscoveryError as exc:
             if legacy_explicit_root is not None or settings.data_root is not None:
                 raise
+            discovery_errors.append(exc)
     unique: dict[tuple[str, Path, str], KstInstallationLike] = {}
     for installation in installations:
         client_family = getattr(installation, "client_family", "electron")
         unique[(client_family, installation.root, installation.identity)] = installation
+    if not unique:
+        raise most_specific_discovery_error(discovery_errors)
     return list(unique.values())

@@ -38,6 +38,7 @@ class LegacyKstInstallation:
     history_db: Path
     message_database_paths: tuple[Path, ...]
     promotion_ids: frozenset[str] | None = None
+    identity_fingerprint: tuple[Any, ...] | None = None
     client_family: str = "legacy_java"
 
     def safe_diagnostics(self) -> dict[str, Any]:

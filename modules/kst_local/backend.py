@@ -6,6 +6,10 @@ from typing import Any
 
 from modules.kst_local.db_reader import read_identity_promotion_ids
 from modules.kst_local.discovery import KstDiscoveryError
+from modules.kst_local.fingerprint import (
+    installation_identity_fingerprint,
+    legacy_identity_database_paths,
+)
 from modules.kst_local.legacy_db_reader import (
     KstLegacyDatabaseError,
     inspect_legacy_read_capability,
@@ -59,22 +63,8 @@ def _runtime_input_state(
 def _legacy_database_paths(
     installation: LegacyKstInstallation,
 ) -> tuple[Path, ...]:
-    current_paths = set(installation.message_database_paths)
-    company_dir = installation.history_db.parent
-    try:
-        current_paths.update(
-            path.resolve()
-            for path in company_dir.rglob("*_CS.pdb")
-            if path.is_file() and path.parent.name.endswith("-onlie")
-        )
-    except OSError as exc:
-        raise KstDiscoveryError(
-            "旧版客户端对话数据库无法扫描",
-            category="database_incompatible",
-        ) from exc
-    return (
-        installation.history_db,
-        *sorted(current_paths, key=lambda path: str(path).casefold()),
+    return legacy_identity_database_paths(
+        installation,
     )
 
 
@@ -156,39 +146,9 @@ def installation_runtime_state(
     cancel_event: Any = None,
 ) -> tuple[Any, ...]:
     if isinstance(installation, LegacyKstInstallation):
-        if cancel_event is not None and cancel_event.is_set():
-            raise KstLegacyDatabaseError(
-                "老版快商通数据库读取已取消",
-                category="database_busy_or_timeout",
-            )
-        paths = _legacy_database_paths(installation)
-        database_state: list[tuple[str, int, int]] = []
-        for path in paths:
-            for related_path in (
-                path,
-                path.with_name(path.name + "-wal"),
-                path.with_name(path.name + "-shm"),
-                path.with_name(path.name + "-journal"),
-            ):
-                try:
-                    stat = related_path.stat()
-                    database_state.append(
-                        (
-                            str(related_path),
-                            stat.st_size,
-                            stat.st_mtime_ns,
-                        )
-                    )
-                except OSError:
-                    database_state.append(
-                        (str(related_path), -1, -1)
-                    )
-        return (
-            installation.client_family,
-            str(installation.root),
-            installation.identity,
-            tuple(str(path) for path in paths),
-            tuple(database_state),
+        return installation_identity_fingerprint(
+            installation,
+            cancel_event=cancel_event,
         )
     if isinstance(installation, KstInstallation):
         if snapshot is None:

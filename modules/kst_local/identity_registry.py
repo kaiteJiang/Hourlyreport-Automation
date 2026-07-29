@@ -19,6 +19,7 @@ from modules.kst_local.discovery import (
     KstDiscoveryError,
     discover_all_installations,
 )
+from modules.kst_local.fingerprint import installation_identity_fingerprint
 from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
@@ -53,6 +54,8 @@ _SAFE_FAILURE_DETAILS = {
     "database_incompatible": "数据库结构不兼容",
     "database_busy_or_timeout": "数据库忙或读取超时",
     "identity_mapping": "快商通身份映射未就绪",
+    "installation_root": "快商通客户端目录无效",
+    "data_root": "快商通数据目录无效",
 }
 
 
@@ -202,6 +205,9 @@ class KstIdentityRegistry:
         liveness_checker: Callable[
             [KstInstallationLike], bool
         ] = installation_active,
+        identity_fingerprint_reader: Callable[
+            [KstInstallationLike], Any
+        ] = installation_identity_fingerprint,
         promotion_cache_ttl_seconds: float = 300,
         runtime_cache_ttl_seconds: float = 60,
         runtime_cache_max_entries: int = 64,
@@ -223,6 +229,7 @@ class KstIdentityRegistry:
         self._runtime_state_reader = runtime_state_reader
         self._endpoint_checker = endpoint_checker
         self._liveness_checker = liveness_checker
+        self._identity_fingerprint_reader = identity_fingerprint_reader
         self._promotion_cache_ttl_seconds = max(
             0.0,
             float(promotion_cache_ttl_seconds),
@@ -244,11 +251,13 @@ class KstIdentityRegistry:
             tuple[float, Any, Any],
         ] = OrderedDict()
         self._promotion_cache: dict[
-            tuple[str, str, str, tuple[str, ...]],
+            tuple[Any, ...],
             tuple[float, frozenset[str]],
         ] = {}
         self._projects: dict[str, dict[str, Any]] = {}
         self._bindings: dict[str, KstInstallationLike] = {}
+        self._binding_fingerprints: dict[str, Any] = {}
+        self._stale_projects: set[str] = set()
         self._project_errors: dict[str, str] = {}
         self._identity_error_count = 0
         self._identity_count = 0
@@ -278,13 +287,29 @@ class KstIdentityRegistry:
             tuple(str(path) for path in database_paths),
         )
 
-    def _promotion_ids_for(
+    def _identity_fingerprint_for(
         self,
         installation: KstInstallationLike,
         *,
         cancel_event: Any = None,
+    ) -> Any:
+        return _call_with_supported_keywords(
+            self._identity_fingerprint_reader,
+            installation,
+            cancel_event=cancel_event,
+        )
+
+    def _promotion_ids_for(
+        self,
+        installation: KstInstallationLike,
+        *,
+        fingerprint: Any,
+        cancel_event: Any = None,
     ) -> set[str]:
-        key = self._installation_cache_key(installation)
+        key = (
+            *self._installation_cache_key(installation),
+            fingerprint,
+        )
         now = self._monotonic()
         cached = self._promotion_cache.get(key)
         if cached is not None:
@@ -309,11 +334,32 @@ class KstIdentityRegistry:
         cancel_event: Any = None,
     ) -> None:
         with self._refresh_lock:
-            if force:
-                self._promotion_cache.clear()
-                with self._runtime_lock:
-                    self._runtime_cache.clear()
-            self._refresh_unlocked(cancel_event=cancel_event)
+            try:
+                if force:
+                    self._promotion_cache.clear()
+                    with self._runtime_lock:
+                        self._runtime_cache.clear()
+                self._refresh_unlocked(cancel_event=cancel_event)
+            except Exception as exc:
+                self._fail_closed(exc)
+                raise
+
+    def _fail_closed(self, error: BaseException) -> None:
+        error_category, error_detail = _safe_failure(error)
+        with self._state_lock:
+            self._projects = {}
+            self._bindings = {}
+            self._binding_fingerprints = {}
+            self._stale_projects.clear()
+            self._project_errors = {}
+            self._identity_error_count = 0
+            self._identity_count = 0
+            self._refreshed = False
+            self._last_error_category = error_category
+            self._last_error_detail = error_detail
+            self._promotion_cache.clear()
+            with self._runtime_lock:
+                self._runtime_cache.clear()
 
     def _refresh_unlocked(self, *, cancel_event: Any = None) -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -333,6 +379,7 @@ class KstIdentityRegistry:
             cancel_event=cancel_event,
         )
         bindings: dict[str, KstInstallationLike] = {}
+        binding_fingerprints: dict[str, Any] = {}
         project_errors: dict[str, str] = {}
         identity_error_count = 0
         last_error_category: str | None = None
@@ -340,7 +387,7 @@ class KstIdentityRegistry:
 
         candidates: dict[
             str,
-            list[KstInstallationLike],
+            list[tuple[KstInstallationLike, Any]],
         ] = defaultdict(list)
         conflicted_projects: set[str] = set()
         unready_projects: set[str] = set()
@@ -352,8 +399,25 @@ class KstIdentityRegistry:
                     category="database_busy_or_timeout",
                 )
             try:
+                fingerprint = self._identity_fingerprint_for(
+                    installation,
+                    cancel_event=cancel_event,
+                )
+                discovered_fingerprint = getattr(
+                    installation,
+                    "identity_fingerprint",
+                    None,
+                )
+                if (
+                    discovered_fingerprint is not None
+                    and discovered_fingerprint != fingerprint
+                ):
+                    raise KstIdentityMappingError(
+                        "快商通身份数据库在发现期间发生变化"
+                    )
                 known_ids = self._promotion_ids_for(
                     installation,
+                    fingerprint=fingerprint,
                     cancel_event=cancel_event,
                 )
                 matched_projects = {
@@ -382,7 +446,9 @@ class KstIdentityRegistry:
                 ) = _safe_failure(exc)
                 continue
             if len(matched_projects) == 1:
-                candidates[next(iter(matched_projects))].append(installation)
+                candidates[next(iter(matched_projects))].append(
+                    (installation, fingerprint)
+                )
             elif len(matched_projects) > 1:
                 conflicted_projects.update(matched_projects)
 
@@ -400,18 +466,27 @@ class KstIdentityRegistry:
             elif len(project_candidates) > 1:
                 project_errors[project_id] = "同一项目匹配到多个身份"
             elif len(project_candidates) == 1:
-                bindings[project_id] = project_candidates[0]
+                installation, fingerprint = project_candidates[0]
+                bindings[project_id] = installation
+                binding_fingerprints[project_id] = fingerprint
             else:
                 project_errors[project_id] = "未找到匹配身份"
         with self._state_lock:
             changed_projects = {
                 project_id
                 for project_id in set(self._bindings) | set(bindings)
-                if self._bindings.get(project_id) != bindings.get(project_id)
+                if (
+                    self._bindings.get(project_id)
+                    != bindings.get(project_id)
+                    or self._binding_fingerprints.get(project_id)
+                    != binding_fingerprints.get(project_id)
+                )
             }
             self._projects = project_map
             self._identity_count = len(installations)
             self._bindings = bindings
+            self._binding_fingerprints = binding_fingerprints
+            self._stale_projects.clear()
             self._project_errors = project_errors
             self._identity_error_count = identity_error_count
             self._refreshed = True
@@ -423,12 +498,72 @@ class KstIdentityRegistry:
                         if key[0] in changed_projects:
                             self._runtime_cache.pop(key, None)
 
+    def _mark_binding_stale_unlocked(
+        self,
+        project_id: str,
+        error: BaseException,
+    ) -> tuple[str, str]:
+        category, detail = _safe_failure(error)
+        self._stale_projects.add(project_id)
+        self._last_error_category = category
+        self._last_error_detail = detail
+        with self._runtime_lock:
+            for key in tuple(self._runtime_cache):
+                if key[0] == project_id:
+                    self._runtime_cache.pop(key, None)
+        return category, detail
+
+    def _validate_binding_fingerprint_unlocked(
+        self,
+        project_id: str,
+        installation: KstInstallationLike,
+        *,
+        cancel_event: Any = None,
+    ) -> Any:
+        if project_id in self._stale_projects:
+            raise KstIdentityMappingError(
+                "快商通身份数据库已变化，必须重新扫描"
+            )
+        baseline = self._binding_fingerprints.get(project_id)
+        if baseline is None:
+            error = KstIdentityMappingError(
+                "快商通身份数据库缺少发现基线"
+            )
+            self._mark_binding_stale_unlocked(project_id, error)
+            raise error
+        try:
+            current = self._identity_fingerprint_for(
+                installation,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            category, detail = self._mark_binding_stale_unlocked(
+                project_id,
+                exc,
+            )
+            raise KstIdentityMappingError(
+                detail,
+                category=category,
+            ) from None
+        if current != baseline:
+            error = KstIdentityMappingError(
+                "快商通身份数据库已变化，必须重新扫描"
+            )
+            self._mark_binding_stale_unlocked(project_id, error)
+            raise error
+        return current
+
     def installation_for(
         self,
         project_id: str,
     ) -> KstInstallationLike:
         with self._state_lock:
-            return self._installation_for_unlocked(project_id)
+            installation = self._installation_for_unlocked(project_id)
+            self._validate_binding_fingerprint_unlocked(
+                project_id,
+                installation,
+            )
+            return installation
 
     def _installation_for_unlocked(
         self,
@@ -466,6 +601,11 @@ class KstIdentityRegistry:
         cancel_event: Any = None,
     ) -> Any:
         installation = self._installation_for_unlocked(project_id)
+        self._validate_binding_fingerprint_unlocked(
+            project_id,
+            installation,
+            cancel_event=cancel_event,
+        )
         _call_with_supported_keywords(
             self._liveness_checker,
             installation,
@@ -527,16 +667,21 @@ class KstIdentityRegistry:
         cancel_event: Any = None,
     ) -> dict[str, Any]:
         all_project_ids = sorted(self._projects)
-        bound_project_ids = sorted(self._bindings)
-        unbound_project_ids = sorted(
-            set(all_project_ids) - set(bound_project_ids)
+        ready = (
+            self._refreshed
+            and bool(self._bindings)
+            and not self._stale_projects
         )
-        ready = self._refreshed and bool(bound_project_ids)
         error_category = self._last_error_category
         error_detail = self._last_error_detail
         if ready:
-            for installation in self._bindings.values():
+            for project_id, installation in self._bindings.items():
                 try:
+                    self._validate_binding_fingerprint_unlocked(
+                        project_id,
+                        installation,
+                        cancel_event=cancel_event,
+                    )
                     _call_with_supported_keywords(
                         self._liveness_checker,
                         installation,
@@ -546,6 +691,12 @@ class KstIdentityRegistry:
                     ready = False
                     error_category, error_detail = _safe_failure(exc)
                     break
+        bound_project_ids = sorted(
+            set(self._bindings) - self._stale_projects
+        )
+        unbound_project_ids = sorted(
+            set(all_project_ids) - set(bound_project_ids)
+        )
         health = {
             "status": "ok" if ready else "not_ready",
             "required_endpoints_available": ready,

@@ -6,7 +6,11 @@ from pathlib import Path
 import time
 from typing import Callable, Iterable
 
-from modules.kst_local.discovery import KstDiscoveryError
+from modules.kst_local.discovery import (
+    KstDiscoveryError,
+    most_specific_discovery_error,
+)
+from modules.kst_local.fingerprint import installation_identity_fingerprint
 from modules.kst_local.legacy_db_reader import (
     KstLegacyDatabaseError,
     inspect_legacy_read_capability,
@@ -343,6 +347,7 @@ def _discover_company_identities(
     log_dir: Path,
     cancel_event: object | None,
     fail_closed: bool,
+    diagnostics: list[KstDiscoveryError],
 ) -> list[LegacyKstInstallation]:
     found: list[LegacyKstInstallation] = []
     try:
@@ -365,6 +370,13 @@ def _discover_company_identities(
         identity = company_dir.name
         history_db = company_dir / f"{identity}_HIS.cdb"
         if not history_db.is_file():
+            error = KstDiscoveryError(
+                "旧版快商通数据库结构不兼容",
+                category="database_incompatible",
+            )
+            if fail_closed:
+                raise error
+            diagnostics.append(error)
             continue
         try:
             message_paths = tuple(
@@ -385,13 +397,16 @@ def _discover_company_identities(
             )
             if fail_closed:
                 raise error from exc
+            diagnostics.append(error)
             continue
         if not message_paths:
+            error = KstDiscoveryError(
+                "旧版快商通数据库结构不兼容",
+                category="database_incompatible",
+            )
             if fail_closed:
-                raise KstDiscoveryError(
-                    "旧版快商通数据库结构不兼容",
-                    category="database_incompatible",
-                )
+                raise error
+            diagnostics.append(error)
             continue
         installation = LegacyKstInstallation(
             root=root,
@@ -409,6 +424,10 @@ def _discover_company_identities(
                 cancel_event=cancel_event,
                 deadline=deadline,
             )
+            fingerprint = installation_identity_fingerprint(
+                installation,
+                cancel_event=cancel_event,
+            )
         except KstLegacyDatabaseError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise KstDiscoveryError(
@@ -420,11 +439,23 @@ def _discover_company_identities(
                     str(exc),
                     category=exc.category,
                 ) from None
+            diagnostics.append(
+                KstDiscoveryError(
+                    str(exc),
+                    category=exc.category,
+                )
+            )
+            continue
+        except KstDiscoveryError as exc:
+            if fail_closed:
+                raise
+            diagnostics.append(exc)
             continue
         found.append(
             replace(
                 installation,
                 promotion_ids=frozenset(promotion_ids),
+                identity_fingerprint=fingerprint,
             )
         )
     return found
@@ -466,6 +497,7 @@ def discover_legacy_installations(
     found: list[LegacyKstInstallation] = []
     root_errors: list[KstDiscoveryError] = []
     data_errors: list[KstDiscoveryError] = []
+    automatic_errors: list[KstDiscoveryError] = []
     for root_candidate in root_candidates:
         try:
             root, executable = _validate_legacy_root(root_candidate)
@@ -479,6 +511,13 @@ def discover_legacy_installations(
             except KstDiscoveryError as exc:
                 data_errors.append(exc)
                 continue
+        if not valid_data_roots:
+            automatic_errors.append(
+                KstDiscoveryError(
+                    "旧版客户端数据目录无效",
+                    category="data_root",
+                )
+            )
         if require_running_process and not _matching_process(executable, detected_process_paths):
             if root_is_explicit:
                 mismatch = bool(detected_process_paths)
@@ -494,6 +533,20 @@ def discover_legacy_installations(
                         else "client_not_running"
                     ),
                 )
+            automatic_errors.append(
+                KstDiscoveryError(
+                    (
+                        "客户端程序与运行进程不匹配"
+                        if detected_process_paths
+                        else "客户端未运行"
+                    ),
+                    category=(
+                        "client_path_mismatch"
+                        if detected_process_paths
+                        else "client_not_running"
+                    ),
+                )
+            )
             continue
         for data_root, db_root, log_dir in valid_data_roots:
             if not _has_recent_log(log_dir, timestamp):
@@ -502,6 +555,12 @@ def discover_legacy_installations(
                         "未检测到活动身份",
                         category="inactive_log",
                     )
+                automatic_errors.append(
+                    KstDiscoveryError(
+                        "未检测到活动身份",
+                        category="inactive_log",
+                    )
+                )
                 continue
             try:
                 raw_version = version_reader(executable)
@@ -522,16 +581,40 @@ def discover_legacy_installations(
                             root_is_explicit
                             or explicit_data_root is not None
                         ),
+                        diagnostics=automatic_errors,
                     )
                 )
             except (KstDiscoveryError, OSError) as exc:
+                if cancel_event is not None and cancel_event.is_set():
+                    if isinstance(exc, KstDiscoveryError):
+                        raise
+                    raise KstDiscoveryError(
+                        "老版快商通数据库读取已取消",
+                        category="database_busy_or_timeout",
+                    ) from None
                 if root_is_explicit or explicit_data_root is not None:
                     if isinstance(exc, KstDiscoveryError):
                         raise
                     raise KstDiscoveryError("旧版客户端数据目录无法扫描") from exc
+                automatic_errors.append(
+                    exc
+                    if isinstance(exc, KstDiscoveryError)
+                    else KstDiscoveryError(
+                        "旧版客户端数据目录无法扫描",
+                        category="data_root",
+                    )
+                )
                 continue
     if root_is_explicit and root_errors:
         raise root_errors[0]
     if explicit_data_root is not None and data_errors:
         raise data_errors[0]
-    return found
+    if found:
+        return found
+    raise most_specific_discovery_error(
+        [
+            *root_errors,
+            *data_errors,
+            *automatic_errors,
+        ]
+    )

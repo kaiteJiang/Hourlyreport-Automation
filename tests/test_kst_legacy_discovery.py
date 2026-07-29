@@ -113,6 +113,23 @@ def make_legacy_tree(tmp_path):
     return install, data
 
 
+def configure_automatic_legacy_candidates(
+    monkeypatch,
+    install,
+    data,
+):
+    monkeypatch.setattr(
+        legacy_discovery,
+        "_legacy_root_candidates",
+        lambda _paths: (install,),
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "_data_root_candidates",
+        lambda: (data,),
+    )
+
+
 def test_legacy_discovery_requires_running_matching_onlinecs(tmp_path):
     install, data = make_legacy_tree(tmp_path)
 
@@ -183,7 +200,7 @@ def test_legacy_discovery_rejects_entire_identity_when_any_shard_is_bad(
     assert "agent-b" not in str(captured.value)
 
 
-def test_automatic_legacy_discovery_skips_whole_identity_with_bad_shard(
+def test_automatic_legacy_discovery_reports_bad_database_when_none_are_valid(
     tmp_path,
     monkeypatch,
 ):
@@ -198,21 +215,131 @@ def test_automatic_legacy_discovery_skips_whole_identity_with_bad_shard(
     )
     bad.parent.mkdir(parents=True)
     bad.write_bytes(b"not sqlite")
-    monkeypatch.setattr(
-        legacy_discovery,
-        "_legacy_root_candidates",
-        lambda _paths: (install,),
-    )
-    monkeypatch.setattr(
-        legacy_discovery,
-        "_data_root_candidates",
-        lambda: (data,),
+    configure_automatic_legacy_candidates(
+        monkeypatch,
+        install,
+        data,
     )
 
-    assert discover_legacy_installations(
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_legacy_installations(
+            process_paths=[install / "OnlineCS.exe"],
+            now_timestamp=(
+                data / "logs" / "260729090000.log"
+            ).stat().st_mtime,
+        )
+
+    assert captured.value.category == "database_incompatible"
+    assert "agent-b" not in str(captured.value)
+
+
+def test_automatic_legacy_discovery_reports_client_not_running(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    configure_automatic_legacy_candidates(
+        monkeypatch,
+        install,
+        data,
+    )
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_legacy_installations(
+            process_paths=[],
+            now_timestamp=(
+                data / "logs" / "260729090000.log"
+            ).stat().st_mtime,
+        )
+
+    assert captured.value.category == "client_not_running"
+
+
+def test_automatic_legacy_discovery_reports_inactive_log(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    configure_automatic_legacy_candidates(
+        monkeypatch,
+        install,
+        data,
+    )
+    log_mtime = (
+        data / "logs" / "260729090000.log"
+    ).stat().st_mtime
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_legacy_installations(
+            process_paths=[install / "OnlineCS.exe"],
+            now_timestamp=log_mtime + 901,
+        )
+
+    assert captured.value.category == "inactive_log"
+
+
+def test_automatic_legacy_discovery_reports_locked_database(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    configure_automatic_legacy_candidates(
+        monkeypatch,
+        install,
+        data,
+    )
+    history_db = data / "db" / "company-a" / "company-a_HIS.cdb"
+    locker = sqlite3.connect(history_db, timeout=0)
+    try:
+        locker.execute("BEGIN EXCLUSIVE")
+
+        with pytest.raises(KstDiscoveryError) as captured:
+            discover_legacy_installations(
+                process_paths=[install / "OnlineCS.exe"],
+                now_timestamp=(
+                    data / "logs" / "260729090000.log"
+                ).stat().st_mtime,
+            )
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert captured.value.category == "database_busy_or_timeout"
+
+
+def test_automatic_legacy_discovery_returns_good_identity_despite_bad_peer(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    bad_history = (
+        data / "db" / "company-b" / "company-b_HIS.cdb"
+    )
+    sqlite_history(bad_history)
+    bad_shard = (
+        data
+        / "db"
+        / "company-b"
+        / "agent-b"
+        / "07290900-onlie"
+        / "agent-b_CS.pdb"
+    )
+    bad_shard.parent.mkdir(parents=True)
+    bad_shard.write_bytes(b"not sqlite")
+    configure_automatic_legacy_candidates(
+        monkeypatch,
+        install,
+        data,
+    )
+
+    found = discover_legacy_installations(
         process_paths=[install / "OnlineCS.exe"],
-        now_timestamp=(data / "logs" / "260729090000.log").stat().st_mtime,
-    ) == []
+        now_timestamp=(
+            data / "logs" / "260729090000.log"
+        ).stat().st_mtime,
+    )
+
+    assert [item.identity for item in found] == ["company-a"]
 
 
 def test_legacy_identity_discovery_uses_one_absolute_five_second_deadline(
@@ -330,7 +457,17 @@ def test_environment_legacy_root_is_explicit_and_never_sent_to_electron(
 
     def fake_legacy(**kwargs):
         legacy_calls.append(kwargs)
-        return []
+        return [
+            type(
+                "LegacyInstallation",
+                (),
+                {
+                    "client_family": "legacy_java",
+                    "root": install.resolve(),
+                    "identity": "legacy-id",
+                },
+            )()
+        ]
 
     monkeypatch.setattr(
         legacy_discovery,
@@ -487,17 +624,14 @@ def test_legacy_scan_io_errors_fail_explicit_and_skip_automatic(
         with pytest.raises(KstDiscoveryError, match="旧版客户端"):
             discover_legacy_installations(**kwargs)
     else:
-        monkeypatch.setattr(
-            legacy_discovery,
-            "_legacy_root_candidates",
-            lambda _paths: (install,),
+        configure_automatic_legacy_candidates(
+            monkeypatch,
+            install,
+            data,
         )
-        monkeypatch.setattr(
-            legacy_discovery,
-            "_data_root_candidates",
-            lambda: (data,),
-        )
-        assert discover_legacy_installations(**kwargs) == []
+        with pytest.raises(KstDiscoveryError) as captured:
+            discover_legacy_installations(**kwargs)
+        assert captured.value.category == "data_root"
 
 
 @pytest.mark.parametrize("explicit", [True, False])
@@ -525,14 +659,66 @@ def test_legacy_message_scan_io_errors_fail_explicit_and_skip_automatic(
         with pytest.raises(KstDiscoveryError, match="旧版客户端"):
             discover_legacy_installations(**kwargs)
     else:
-        monkeypatch.setattr(
-            legacy_discovery,
-            "_legacy_root_candidates",
-            lambda _paths: (install,),
+        configure_automatic_legacy_candidates(
+            monkeypatch,
+            install,
+            data,
         )
-        monkeypatch.setattr(
-            legacy_discovery,
-            "_data_root_candidates",
-            lambda: (data,),
+        with pytest.raises(KstDiscoveryError) as captured:
+            discover_legacy_installations(**kwargs)
+        assert captured.value.category == "data_root"
+
+
+@pytest.mark.parametrize(
+    ("electron_category", "legacy_category", "expected_category"),
+    [
+        (
+            "inactive_log",
+            "database_incompatible",
+            "database_incompatible",
+        ),
+        (
+            "database_incompatible",
+            "database_busy_or_timeout",
+            "database_busy_or_timeout",
+        ),
+    ],
+)
+def test_combined_automatic_discovery_propagates_most_specific_failure(
+    tmp_path,
+    monkeypatch,
+    electron_category,
+    legacy_category,
+    expected_category,
+):
+    monkeypatch.delenv("KST_INSTALLATION_ROOT", raising=False)
+    monkeypatch.setattr(
+        discovery,
+        "discover_installations",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            KstDiscoveryError(
+                "private stale Electron log",
+                category=electron_category,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "discover_legacy_installations",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            KstDiscoveryError(
+                "private legacy SQL detail",
+                category=legacy_category,
+            )
+        ),
+    )
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_all_installations(
+            tmp_path,
+            require_running_process=True,
         )
-        assert discover_legacy_installations(**kwargs) == []
+
+    assert captured.value.category == expected_category
+    assert "private" not in str(captured.value)
+    assert "SQL" not in str(captured.value)

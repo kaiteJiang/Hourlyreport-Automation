@@ -623,6 +623,10 @@ class KstApiManager(QObject):
                 and health.get("required_endpoints_available") is True
             )
         except Exception as exc:
+            with self._lock:
+                if self._registry is registry:
+                    self._registry = None
+                    self._last_registry_refresh_at = None
             return self._record_failure(generation, cancel_event, exc)
         with self._lock:
             if (

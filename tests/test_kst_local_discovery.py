@@ -160,13 +160,35 @@ def test_active_identity_age_window_can_be_configured_by_environment(
 def test_registry_discovery_can_require_running_client_process(tmp_path):
     root, local_app_data = _build_installation(tmp_path)
 
-    with pytest.raises(KstDiscoveryError, match="正在运行"):
+    with pytest.raises(KstDiscoveryError, match="正在运行") as captured:
         discover_installations(
             explicit_root=root,
             local_app_data=local_app_data,
             require_running_process=True,
             process_checker=lambda _electron: False,
         )
+
+    assert captured.value.category == "client_not_running"
+
+
+def test_discovery_reports_inactive_log_when_every_identity_is_stale(
+    tmp_path,
+):
+    root, local_app_data = _build_installation(tmp_path)
+    log_file = next(
+        (local_app_data / "OnlineWebCSNew" / "log").rglob("app.log")
+    )
+    stale_time = time.time() - 3600
+    os.utime(log_file, (stale_time, stale_time))
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        discover_installations(
+            explicit_root=root,
+            local_app_data=local_app_data,
+            active_within_seconds=300,
+        )
+
+    assert captured.value.category == "inactive_log"
 
 
 def test_client_process_check_runs_without_a_console_window():

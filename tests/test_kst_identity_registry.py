@@ -78,6 +78,16 @@ def legacy_installation(
     )
 
 
+def materialize_legacy_database_files(
+    item: LegacyKstInstallation,
+) -> None:
+    item.history_db.parent.mkdir(parents=True, exist_ok=True)
+    item.history_db.write_bytes(b"history")
+    for path in item.message_database_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"live")
+
+
 @pytest.mark.parametrize(
     ("common_query", "headers", "expected"),
     [
@@ -337,7 +347,9 @@ def test_registry_evicts_old_runtime_dates(tmp_path):
     assert calls == [1, 1, 1, 1]
 
 
-def test_registry_rebuilds_runtime_when_database_wal_changes(tmp_path):
+def test_registry_requires_refresh_when_electron_database_wal_changes(
+    tmp_path,
+):
     database = tmp_path / "db" / "id-a" / "VISITOR.db"
     database.parent.mkdir(parents=True)
     database.write_bytes(b"database")
@@ -354,8 +366,13 @@ def test_registry_rebuilds_runtime_when_database_wal_changes(tmp_path):
 
     first = registry.build_runtime("a", "2026-07-27")
     database.with_name(database.name + "-wal").write_bytes(b"new rows")
-    second = registry.build_runtime("a", "2026-07-27")
 
+    assert registry.health()["status"] == "not_ready"
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-27")
+
+    registry.refresh(force=True)
+    second = registry.build_runtime("a", "2026-07-27")
     assert second is not first
     assert calls == [1, 1]
 
@@ -649,6 +666,91 @@ def test_force_refresh_clears_promotion_and_runtime_caches_immediately(
     assert reads == [{"10001"}, {"20002"}]
 
 
+def test_fingerprint_change_bypasses_promotion_cache_without_force(
+    tmp_path,
+):
+    item = legacy_installation(tmp_path, "legacy-id")
+    materialize_legacy_database_files(item)
+    current_ids = [{"10001"}]
+    reads = []
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [
+            project("a", ["10001"]),
+            project("b", ["20002"]),
+        ],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: (
+            reads.append(set(current_ids[0])) or set(current_ids[0])
+        ),
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+        promotion_cache_ttl_seconds=300,
+    )
+    registry.refresh()
+    assert registry.installation_for("a") is item
+
+    current_ids[0] = {"20002"}
+    item.history_db.with_name(
+        item.history_db.name + "-wal"
+    ).write_bytes(b"new identity rows")
+    assert registry.health()["status"] == "not_ready"
+
+    registry.refresh()
+
+    assert registry.installation_for("b") is item
+    with pytest.raises(KstIdentityMappingError):
+        registry.installation_for("a")
+    assert reads == [{"10001"}, {"20002"}]
+
+
+def test_refresh_failure_atomically_invalidates_old_binding_and_runtime(
+    tmp_path,
+):
+    item = legacy_installation(tmp_path, "legacy-id")
+    materialize_legacy_database_files(item)
+    load_calls = []
+    runtime_calls = []
+
+    def load_installations():
+        load_calls.append(1)
+        if len(load_calls) > 1:
+            raise KstDiscoveryError(
+                "private locked database",
+                category="database_busy_or_timeout",
+            )
+        return [item]
+
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=load_installations,
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project("a", ["10001"]),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=lambda *_args, **_kwargs: (
+            runtime_calls.append(1) or HealthyRuntime()
+        ),
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
+    )
+    registry.refresh()
+    registry.build_runtime("a", "2026-07-29")
+
+    with pytest.raises(KstDiscoveryError) as captured:
+        registry.refresh(force=True)
+
+    assert captured.value.category == "database_busy_or_timeout"
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["error_category"] == "database_busy_or_timeout"
+    with pytest.raises(KstIdentityMappingError):
+        registry.installation_for("a")
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
+    assert runtime_calls == [1]
+
+
 def test_registry_refresh_and_runtime_forward_generation_cancellation(
     tmp_path,
 ):
@@ -723,13 +825,11 @@ def test_registry_refresh_and_runtime_forward_generation_cancellation(
     ]
 
 
-def test_new_legacy_shard_invalidates_cached_runtime(tmp_path):
+def test_missing_legacy_main_database_marks_binding_stale_and_rejects_build(
+    tmp_path,
+):
     item = legacy_installation(tmp_path, "legacy-id")
-    item.history_db.parent.mkdir(parents=True)
-    item.history_db.write_bytes(b"history")
-    for path in item.message_database_paths:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"live")
+    materialize_legacy_database_files(item)
     calls = []
     registry = KstIdentityRegistry(
         tmp_path,
@@ -747,22 +847,68 @@ def test_new_legacy_shard_invalidates_cached_runtime(tmp_path):
     registry.refresh()
 
     first = registry.build_runtime("a", "2026-07-29")
-    second = registry.build_runtime("a", "2026-07-29")
-    assert second is first
+    item.history_db.unlink()
 
-    new_shard = (
-        item.history_db.parent
-        / "agent"
-        / "07291300-onlie"
-        / "new_CS.pdb"
+    health = registry.health()
+    assert health["status"] == "not_ready"
+    assert health["error_category"] == "identity_mapping"
+    with pytest.raises(KstIdentityMappingError):
+        registry.installation_for("a")
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
+    assert first is not None
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("mutation", ["wal", "new_shard"])
+def test_legacy_identity_change_recovers_only_after_successful_refresh(
+    tmp_path,
+    mutation,
+):
+    item = legacy_installation(tmp_path, "legacy-id")
+    materialize_legacy_database_files(item)
+    calls = []
+    registry = KstIdentityRegistry(
+        tmp_path,
+        projects_loader=lambda _root: [project("a", ["10001"])],
+        installations_loader=lambda: [item],
+        promotion_id_reader=lambda _item: {"10001"},
+        project_loader=lambda _root, _project_id: project("a", ["10001"]),
+        config_builder=lambda loaded, _base: loaded,
+        runtime_builder=lambda *_args, **_kwargs: (
+            calls.append(1) or HealthyRuntime()
+        ),
+        endpoint_checker=lambda *_args: True,
+        liveness_checker=lambda *_args, **_kwargs: True,
     )
-    new_shard.parent.mkdir(parents=True)
-    with sqlite3.connect(new_shard) as connection:
-        connection.execute(
-            "CREATE TABLE DIALOGRECORD_VISITOR (recId TEXT, addTime TEXT)"
+    registry.refresh()
+    first = registry.build_runtime("a", "2026-07-29")
+
+    if mutation == "wal":
+        item.history_db.with_name(
+            item.history_db.name + "-wal"
+        ).write_bytes(b"new rows")
+    else:
+        new_shard = (
+            item.history_db.parent
+            / "agent"
+            / "07291300-onlie"
+            / "new_CS.pdb"
         )
+        new_shard.parent.mkdir(parents=True)
+        with sqlite3.connect(new_shard) as connection:
+            connection.execute(
+                "CREATE TABLE DIALOGRECORD_VISITOR "
+                "(recId TEXT, addTime TEXT)"
+            )
 
-    third = registry.build_runtime("a", "2026-07-29")
+    assert registry.health()["status"] == "not_ready"
+    with pytest.raises(KstIdentityMappingError):
+        registry.build_runtime("a", "2026-07-29")
 
-    assert third is not first
+    registry.refresh()
+
+    assert registry.health()["status"] == "ok"
+    second = registry.build_runtime("a", "2026-07-29")
+    assert second is not first
     assert calls == [1, 1]

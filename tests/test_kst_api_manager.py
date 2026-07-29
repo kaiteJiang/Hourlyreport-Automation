@@ -424,6 +424,50 @@ def test_rescan_forces_registry_refresh_and_forwards_generation_cancel_event(
     assert initial_event.is_set() is True
 
 
+def test_owned_registry_refresh_failure_invalidates_old_request_routing(
+    qapp,
+    tmp_path,
+):
+    server = FakeServer()
+
+    class FailsOnSecondRefresh(FakeRegistry):
+        def refresh(self, *, force=False, cancel_event=None):
+            self.refresh_calls += 1
+            if self.refresh_calls > 1:
+                raise KstDiscoveryError(
+                    "private stale identity database",
+                    category="database_incompatible",
+                )
+
+    registry = FailsOnSecondRefresh()
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=lambda _root: registry,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=5_000,
+    )
+    manager.start()
+    try:
+        assert wait_until(server.started.is_set)
+        assert manager._registry is registry
+
+        manager.rescan()
+        assert wait_until(lambda: registry.refresh_calls == 2)
+        assert wait_until(
+            lambda: manager._worker is None
+            or not manager._worker.is_alive()
+        )
+
+        assert manager._server is server
+        assert manager._registry is None
+        assert manager._registry_health()["status"] == "not_ready"
+        with pytest.raises(RuntimeError, match="not ready"):
+            manager._service_for("a", "2026-07-29")
+    finally:
+        manager.stop()
+
+
 def test_stop_cancels_registry_refresh_cooperatively(qapp, tmp_path):
     entered = threading.Event()
     exited = threading.Event()
