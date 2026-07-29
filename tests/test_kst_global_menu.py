@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog
 
-from gui.main_window import MainWindow
+from gui.main_window import InlineConfigMenu, MainWindow
 from modules.kst_local.machine_settings import (
     load_kst_machine_settings,
     save_kst_machine_settings,
@@ -72,6 +72,15 @@ def test_system_menu_contains_global_kst_submenu(qapp):
     assert window.inline_config_menu.kst_mode_toggle.text() == "快商通模式"
     assert window.inline_config_menu.kst_api_choice.text() == "API 自动获取"
     assert window.inline_config_menu.kst_export_choice.text() == "人工导出对话"
+    assert (
+        window.inline_config_menu.kst_installation_root_choice.text()
+        == "选择快商通程序目录"
+    )
+    assert (
+        window.inline_config_menu.kst_data_root_choice.text()
+        == "选择快商通数据目录"
+    )
+    assert window.inline_config_menu.kst_rescan_choice.text() == "重新扫描快商通"
     assert [
         "---" if action.isSeparator() else action.text()
         for action in window.kst_mode_menu.actions()
@@ -84,6 +93,93 @@ def test_system_menu_contains_global_kst_submenu(qapp):
         "重新扫描快商通",
     ]
 
+    window.stop_kst_api()
+    window.close()
+
+
+def test_inline_kst_path_controls_emit_requests_and_follow_api_mode(
+    qapp,
+):
+    menu = InlineConfigMenu()
+    events = []
+    menu.kst_installation_root_requested.connect(
+        lambda: events.append("installation")
+    )
+    menu.kst_data_root_requested.connect(
+        lambda: events.append("data")
+    )
+    menu.kst_rescan_requested.connect(
+        lambda: events.append("rescan")
+    )
+
+    menu.sync("hidden", 1.0, False, "local_api")
+    menu.kst_installation_root_choice.click()
+    menu.kst_data_root_choice.click()
+    menu.kst_rescan_choice.click()
+
+    assert events == ["installation", "data", "rescan"]
+    assert menu.kst_rescan_choice.isEnabled() is True
+
+    menu.sync("hidden", 1.0, False, "export")
+
+    assert menu.kst_rescan_choice.isEnabled() is False
+    menu.close()
+
+
+def test_path_failure_opens_only_one_matching_directory_dialog(
+    qapp,
+    tmp_path,
+):
+    _write_app_config(tmp_path, "local_api")
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: FakeKstApiManager(),
+    )
+    prompts = []
+    window.choose_kst_installation_root = lambda: prompts.append(
+        "installation"
+    )
+    window.choose_kst_data_root = lambda: prompts.append("data")
+
+    window.on_kst_api_status_changed(
+        False,
+        "快商通客户端目录无效",
+    )
+    window.on_kst_api_status_changed(
+        False,
+        "快商通客户端目录无效",
+    )
+    window.on_kst_api_status_changed(
+        False,
+        "快商通数据目录无效",
+    )
+
+    assert prompts == ["installation"]
+    window.stop_kst_api()
+    window.close()
+
+
+def test_database_timeout_does_not_open_path_dialog(
+    qapp,
+    tmp_path,
+):
+    _write_app_config(tmp_path, "local_api")
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: FakeKstApiManager(),
+    )
+    prompts = []
+    window.choose_kst_installation_root = lambda: prompts.append(
+        "installation"
+    )
+    window.choose_kst_data_root = lambda: prompts.append("data")
+
+    window.on_kst_api_status_changed(
+        False,
+        "数据库忙或读取超时",
+    )
+
+    assert prompts == []
     window.stop_kst_api()
     window.close()
 

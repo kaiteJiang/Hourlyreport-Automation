@@ -610,6 +610,9 @@ class InlineConfigMenu(QFrame):
     excel_path_config_requested = Signal()
     excel_auto_open_requested = Signal(bool)
     kst_data_source_requested = Signal(str)
+    kst_installation_root_requested = Signal()
+    kst_data_root_requested = Signal()
+    kst_rescan_requested = Signal()
     pet_mode_requested = Signal(str)
     pet_scale_requested = Signal(float)
     exit_requested = Signal()
@@ -652,8 +655,29 @@ class InlineConfigMenu(QFrame):
             "人工导出对话",
             lambda: self.kst_data_source_requested.emit("export"),
         )
+        self.kst_installation_root_choice = self._choice_row(
+            "选择快商通程序目录",
+            lambda: self._run_and_close(
+                self.kst_installation_root_requested.emit
+            ),
+        )
+        self.kst_data_root_choice = self._choice_row(
+            "选择快商通数据目录",
+            lambda: self._run_and_close(
+                self.kst_data_root_requested.emit
+            ),
+        )
+        self.kst_rescan_choice = self._choice_row(
+            "重新扫描快商通",
+            lambda: self._run_and_close(
+                self.kst_rescan_requested.emit
+            ),
+        )
         kst_mode_layout.addWidget(self.kst_api_choice)
         kst_mode_layout.addWidget(self.kst_export_choice)
+        kst_mode_layout.addWidget(self.kst_installation_root_choice)
+        kst_mode_layout.addWidget(self.kst_data_root_choice)
+        kst_mode_layout.addWidget(self.kst_rescan_choice)
         self.kst_mode_section.hide()
         layout.addWidget(self.kst_mode_section)
 
@@ -925,6 +949,9 @@ class InlineConfigMenu(QFrame):
         self._set_selected(
             self.kst_export_choice,
             kst_data_source == "export",
+        )
+        self.kst_rescan_choice.setEnabled(
+            kst_data_source == "local_api"
         )
         value = round(normalize_pet_scale(pet_scale) * 100)
         self.size_slider.blockSignals(True)
@@ -1654,6 +1681,7 @@ class MainWindow(QMainWindow):
         self._kst_api_requested = self.kst_data_source == "local_api"
         self._kst_api_manager_active = False
         self._application_exiting = False
+        self._kst_path_prompted = False
         self._pet_scale_save_timer = QTimer(self)
         self._pet_scale_save_timer.setSingleShot(True)
         self._pet_scale_save_timer.setInterval(250)
@@ -1984,6 +2012,15 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.excel_auto_open_requested.connect(self.set_excel_auto_open)
         self.inline_config_menu.kst_data_source_requested.connect(
             self.set_global_kst_data_source
+        )
+        self.inline_config_menu.kst_installation_root_requested.connect(
+            self.choose_kst_installation_root
+        )
+        self.inline_config_menu.kst_data_root_requested.connect(
+            self.choose_kst_data_root
+        )
+        self.inline_config_menu.kst_rescan_requested.connect(
+            self.rescan_kst_api
         )
         self.inline_config_menu.pet_mode_requested.connect(self.set_desktop_pet_mode)
         self.inline_config_menu.pet_scale_requested.connect(self.set_desktop_pet_scale)
@@ -3462,6 +3499,21 @@ class MainWindow(QMainWindow):
 
     def on_kst_api_status_changed(self, ready: bool, detail: str) -> None:
         self.kst_status_control.set_api_ready(ready, detail)
+        if (
+            ready
+            or self._application_exiting
+            or self.kst_data_source != "local_api"
+            or self._kst_path_prompted
+        ):
+            return
+        chooser = {
+            "快商通客户端目录无效": self.choose_kst_installation_root,
+            "快商通数据目录无效": self.choose_kst_data_root,
+        }.get(str(detail or "").strip())
+        if chooser is None:
+            return
+        self._kst_path_prompted = True
+        chooser()
 
     def set_excel_auto_open(self, enabled: bool) -> None:
         previous = self.open_excel_automatically
