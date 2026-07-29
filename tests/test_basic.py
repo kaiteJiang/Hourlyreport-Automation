@@ -1006,9 +1006,10 @@ def test_install_env_prefers_runtime_lock_when_available():
 def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("main.py")) is True
     assert should_include_file(Path("modules") / "doctor.py") is True
-    assert should_include_file(Path("reports") / ".gitkeep") is True
-    assert should_include_file(Path("logs") / ".gitkeep") is True
-    assert should_include_file(Path("backups") / ".gitkeep") is True
+    assert should_include_file(Path("reports") / ".gitkeep") is False
+    assert should_include_file(Path("logs") / ".gitkeep") is False
+    assert should_include_file(Path("backups") / ".gitkeep") is False
+    assert should_include_file(Path("kst_exports") / ".gitkeep") is False
     assert should_include_file(Path("reports") / "final_run_report.json") is False
     assert should_include_file(Path("logs") / "run.log") is False
     assert should_include_file(Path("backups") / "target.xlsx") is False
@@ -9643,6 +9644,10 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
         "runtime/kst_local_api_token",
         "kst_exports/manual.csv",
         "diagnostics/bundle.json",
+        "logs/.gitkeep",
+        "reports/.gitkeep",
+        "backups/.gitkeep",
+        "kst_exports/.gitkeep",
     ):
         private = tmp_path / relative
         private.parent.mkdir(parents=True, exist_ok=True)
@@ -9675,6 +9680,9 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     assert "requirements-runtime.txt" in names
     assert not any(name.lower().endswith((".db", ".cdb", ".pdb")) for name in names)
     assert not any(name.startswith("runtime/") for name in names)
+    assert not any(name.startswith("logs/") for name in names)
+    assert not any(name.startswith("reports/") for name in names)
+    assert not any(name.startswith("backups/") for name in names)
     assert not any(name.startswith("kst_exports/") for name in names)
     assert not any(name.startswith("diagnostics/") for name in names)
     assert all("\\" not in name for name in names)

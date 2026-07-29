@@ -12,8 +12,7 @@ DEFAULT_VERSION = "hermes_20260710"
 EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", ".superpowers", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud", "diagnostics"}
 DESKTOP_EXE = "hourlyreport_automation.exe"
 DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
-EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
-RUNTIME_KEEP_DIRS = {"kst_exports"}
+EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups", "kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth"}
 DATABASE_SUFFIXES = {".db", ".cdb", ".pdb", ".sqlite", ".sqlite3"}
 DATABASE_SIDECAR_SUFFIXES = {"-wal", "-shm", "-journal"}
@@ -27,7 +26,6 @@ EXCLUDE_FILES = {
     "requirements-dev.txt",
     "design-qa.md",
 }
-EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json", "unknown_baidu_accounts.json"}
 LEGACY_ROOT_FILES = {
     "create_config.bat",
     "run_11.bat",
@@ -166,12 +164,7 @@ def should_include_file(
             return False
         return False
     if parts and parts[0] in EXCLUDE_RUNTIME_DIRS:
-        return path.name == ".gitkeep"
-    # 运行时目录只保留 .gitkeep
-    if parts and parts[0] in RUNTIME_KEEP_DIRS:
-        if path.name in EXCLUDE_REPORT_FILES:
-            return False
-        return path.name == ".gitkeep"
+        return False
     # samples 只保留 .gitkeep
     if parts and parts[0] == "samples":
         return path.name == ".gitkeep"
