@@ -418,6 +418,97 @@ def test_rapid_restart_never_runs_two_manager_workers(qapp, tmp_path):
         manager.stop()
 
 
+def test_rescan_waiting_on_retiring_worker_is_consumed_by_new_worker(
+    qapp,
+    tmp_path,
+):
+    entered = threading.Event()
+    release = threading.Event()
+    attempts = []
+
+    class FirstAttemptBlocks:
+        def __init__(self, *_args):
+            pass
+
+        def refresh(self):
+            attempts.append(1)
+            if len(attempts) == 1:
+                entered.set()
+                release.wait()
+            raise RuntimeError("客户端未运行")
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=FirstAttemptBlocks,
+    )
+    manager.start()
+    assert entered.wait(timeout=1)
+
+    try:
+        manager.stop()
+        manager.start()
+        manager.rescan()
+        release.set()
+
+        assert wait_until(
+            lambda: manager._retry_timer.isActive()
+            and (manager._worker is None or not manager._worker.is_alive())
+        )
+        assert attempts == [1, 1]
+        assert manager._retry_timer.interval() == 5_000
+    finally:
+        release.set()
+        manager.stop()
+
+
+def test_rescans_during_current_worker_coalesce_to_one_extra_attempt(
+    qapp,
+    tmp_path,
+):
+    entered = threading.Event()
+    release = threading.Event()
+    attempts = []
+
+    class FirstAttemptBlocks:
+        def __init__(self, *_args):
+            pass
+
+        def refresh(self):
+            attempts.append(1)
+            if len(attempts) == 1:
+                entered.set()
+                release.wait()
+            raise RuntimeError("客户端未运行")
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=FirstAttemptBlocks,
+    )
+    manager.start()
+    assert entered.wait(timeout=1)
+
+    try:
+        manager.rescan()
+        manager.rescan()
+        manager.rescan()
+        release.set()
+
+        assert wait_until(
+            lambda: len(attempts) == 2
+            and manager._retry_timer.isActive()
+            and (manager._worker is None or not manager._worker.is_alive())
+        )
+        QApplication.processEvents()
+        time.sleep(0.05)
+        assert attempts == [1, 1]
+        assert manager._retry_timer.interval() == 15_000
+    finally:
+        release.set()
+        manager.stop()
+
+
 def test_delayed_old_worker_finished_does_not_bypass_current_backoff(
     qapp,
     tmp_path,

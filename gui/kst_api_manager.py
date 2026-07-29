@@ -299,6 +299,7 @@ class KstApiManager(QObject):
             )
             self._worker_generation = generation
             self._retiring_worker_restart = None
+            self._rescan_pending = False
             worker = self._worker
         worker.start()
 
