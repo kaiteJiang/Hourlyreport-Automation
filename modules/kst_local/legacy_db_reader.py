@@ -15,6 +15,15 @@ from modules.kst_local.models import KstConversation, LegacyKstInstallation
 class KstLegacyDatabaseError(RuntimeError):
     """老版快商通数据库无法被完整、安全地读取。"""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "database_incompatible",
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+
 
 _PROMOTION_PATTERN = re.compile(
     r"推广\s*ID\s*[:：]?\s*(\d{5,})(?!\w)",
@@ -85,11 +94,39 @@ def _connect_read_only(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _database_failure(
+    error: BaseException,
+    *,
+    incompatible_message: str,
+) -> KstLegacyDatabaseError:
+    error_code = getattr(error, "sqlite_errorcode", None)
+    lowered = str(error).casefold()
+    if (
+        error_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+        or "locked" in lowered
+        or "busy" in lowered
+    ):
+        return KstLegacyDatabaseError(
+            "老版快商通数据库忙或读取超时",
+            category="database_busy_or_timeout",
+        )
+    return KstLegacyDatabaseError(
+        incompatible_message,
+        category="database_incompatible",
+    )
+
+
 def _check_interrupted(cancel_event: Any, deadline: float) -> None:
     if cancel_event is not None and cancel_event.is_set():
-        raise KstLegacyDatabaseError("老版快商通数据库读取已取消")
+        raise KstLegacyDatabaseError(
+            "老版快商通数据库读取已取消",
+            category="database_busy_or_timeout",
+        )
     if time.monotonic() >= deadline:
-        raise KstLegacyDatabaseError("老版快商通数据库读取超时")
+        raise KstLegacyDatabaseError(
+            "老版快商通数据库忙或读取超时",
+            category="database_busy_or_timeout",
+        )
 
 
 def _validate_target_date(value: str) -> str:
@@ -154,7 +191,7 @@ def _validate_database_capability(
     deadline: float,
 ) -> None:
     _check_interrupted(cancel_event, deadline)
-    database_error = False
+    failure: KstLegacyDatabaseError | None = None
     try:
         with closing(_connect_read_only(path)) as connection:
             _install_progress_handler(connection, cancel_event, deadline)
@@ -162,13 +199,58 @@ def _validate_database_capability(
             _check_interrupted(cancel_event, deadline)
     except KstLegacyDatabaseError:
         raise
-    except (OSError, sqlite3.Error, ValueError):
-        database_error = True
-    if database_error:
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        failure = _database_failure(
+            exc,
+            incompatible_message="老版快商通数据库结构不兼容",
+        )
+    if failure is not None:
         _check_interrupted(cancel_event, deadline)
+        raise failure from None
+
+
+def inspect_legacy_read_capability(
+    installation: LegacyKstInstallation,
+    *,
+    cancel_event: Any = None,
+    deadline: float | None = None,
+    deadline_seconds: float = 5.0,
+) -> set[str]:
+    absolute_deadline = (
+        time.monotonic() + deadline_seconds
+        if deadline is None
+        else float(deadline)
+    )
+    if not installation.message_database_paths:
         raise KstLegacyDatabaseError(
-            "老版快商通数据库读取能力不可用"
-        ) from None
+            "老版快商通数据库结构不兼容",
+            category="database_incompatible",
+        )
+    _validate_database_capability(
+        installation.history_db,
+        _HISTORY_CAPABILITY_QUERY,
+        cancel_event,
+        absolute_deadline,
+    )
+    for database_path in installation.message_database_paths:
+        _validate_database_capability(
+            database_path,
+            _MESSAGE_CAPABILITY_QUERY,
+            cancel_event,
+            absolute_deadline,
+        )
+    promotion_ids = _read_legacy_promotion_ids_with_deadline(
+        installation,
+        cancel_event,
+        absolute_deadline,
+    )
+    _check_interrupted(cancel_event, absolute_deadline)
+    if not promotion_ids:
+        raise KstLegacyDatabaseError(
+            "老版快商通身份缺少可用推广 ID",
+            category="identity_mapping",
+        )
+    return promotion_ids
 
 
 def validate_legacy_read_capability(
@@ -177,30 +259,11 @@ def validate_legacy_read_capability(
     cancel_event: Any = None,
     deadline_seconds: float = 5.0,
 ) -> None:
-    deadline = time.monotonic() + deadline_seconds
-    if not installation.message_database_paths:
-        raise KstLegacyDatabaseError(
-            "老版快商通数据库读取能力不可用"
-        )
-    _validate_database_capability(
-        installation.history_db,
-        _HISTORY_CAPABILITY_QUERY,
-        cancel_event,
-        deadline,
-    )
-    for database_path in installation.message_database_paths:
-        _validate_database_capability(
-            database_path,
-            _MESSAGE_CAPABILITY_QUERY,
-            cancel_event,
-            deadline,
-        )
-    _read_legacy_promotion_ids_with_deadline(
+    inspect_legacy_read_capability(
         installation,
-        cancel_event,
-        deadline,
+        cancel_event=cancel_event,
+        deadline_seconds=deadline_seconds,
     )
-    _check_interrupted(cancel_event, deadline)
 
 
 def _read_authorized_rec_ids(
@@ -212,7 +275,7 @@ def _read_authorized_rec_ids(
     rec_ids: set[str] = set()
     for database_path in installation.message_database_paths:
         _check_interrupted(cancel_event, deadline)
-        database_error = False
+        failure: KstLegacyDatabaseError | None = None
         try:
             with closing(_connect_read_only(database_path)) as connection:
                 _install_progress_handler(connection, cancel_event, deadline)
@@ -232,13 +295,14 @@ def _read_authorized_rec_ids(
                 _check_interrupted(cancel_event, deadline)
         except KstLegacyDatabaseError:
             raise
-        except (OSError, sqlite3.Error, ValueError):
-            database_error = True
-        if database_error:
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            failure = _database_failure(
+                exc,
+                incompatible_message="老版快商通数据库结构不兼容",
+            )
+        if failure is not None:
             _check_interrupted(cancel_event, deadline)
-            raise KstLegacyDatabaseError(
-                "老版快商通实时会话数据库读取失败"
-            ) from None
+            raise failure from None
     return rec_ids
 
 
@@ -250,7 +314,7 @@ def _read_all_authorized_rec_ids(
     rec_ids: set[str] = set()
     for database_path in installation.message_database_paths:
         _check_interrupted(cancel_event, deadline)
-        database_error = False
+        failure: KstLegacyDatabaseError | None = None
         try:
             with closing(_connect_read_only(database_path)) as connection:
                 _install_progress_handler(connection, cancel_event, deadline)
@@ -268,13 +332,14 @@ def _read_all_authorized_rec_ids(
                 _check_interrupted(cancel_event, deadline)
         except KstLegacyDatabaseError:
             raise
-        except (OSError, sqlite3.Error, ValueError):
-            database_error = True
-        if database_error:
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            failure = _database_failure(
+                exc,
+                incompatible_message="老版快商通数据库结构不兼容",
+            )
+        if failure is not None:
             _check_interrupted(cancel_event, deadline)
-            raise KstLegacyDatabaseError(
-                "老版快商通实时会话数据库读取失败"
-            ) from None
+            raise failure from None
     return rec_ids
 
 
@@ -286,7 +351,7 @@ def _read_history_rows(
 ) -> dict[str, tuple[Any, ...]]:
     rows_by_rec_id: dict[str, tuple[Any, ...]] = {}
     ordered_rec_ids = sorted(rec_ids)
-    database_error = False
+    failure: KstLegacyDatabaseError | None = None
     try:
         with closing(_connect_read_only(installation.history_db)) as connection:
             _install_progress_handler(connection, cancel_event, deadline)
@@ -316,13 +381,14 @@ def _read_history_rows(
                 _check_interrupted(cancel_event, deadline)
     except KstLegacyDatabaseError:
         raise
-    except (OSError, sqlite3.Error, ValueError):
-        database_error = True
-    if database_error:
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        failure = _database_failure(
+            exc,
+            incompatible_message="老版快商通数据库结构不兼容",
+        )
+    if failure is not None:
         _check_interrupted(cancel_event, deadline)
-        raise KstLegacyDatabaseError(
-            "老版快商通历史会话数据库读取失败"
-        ) from None
+        raise failure from None
     return rows_by_rec_id
 
 
@@ -346,7 +412,10 @@ def _read_legacy_promotion_ids_with_deadline(
         deadline,
     )
     if set(history_rows) != authorized:
-        raise KstLegacyDatabaseError("老版快商通会话尚未同步完整")
+        raise KstLegacyDatabaseError(
+            "老版快商通会话尚未同步完整",
+            category="identity_mapping",
+        )
     promotion_ids: set[str] = set()
     _check_interrupted(cancel_event, deadline)
     for row in history_rows.values():
@@ -366,11 +435,18 @@ def read_legacy_promotion_ids(
     deadline_seconds: float = 5.0,
 ) -> set[str]:
     deadline = time.monotonic() + deadline_seconds
-    return _read_legacy_promotion_ids_with_deadline(
+    promotion_ids = _read_legacy_promotion_ids_with_deadline(
         installation,
         cancel_event,
         deadline,
     )
+    _check_interrupted(cancel_event, deadline)
+    if not promotion_ids:
+        raise KstLegacyDatabaseError(
+            "老版快商通身份缺少可用推广 ID",
+            category="identity_mapping",
+        )
+    return promotion_ids
 
 
 def read_legacy_conversations(
@@ -398,7 +474,10 @@ def read_legacy_conversations(
         deadline,
     )
     if set(history_rows) != authorized:
-        raise KstLegacyDatabaseError("老版快商通会话尚未同步完整")
+        raise KstLegacyDatabaseError(
+            "老版快商通会话尚未同步完整",
+            category="identity_mapping",
+        )
 
     conversations: list[KstConversation] = []
     _check_interrupted(cancel_event, deadline)
@@ -412,7 +491,10 @@ def read_legacy_conversations(
         start_time = _validate_start_time(row[1], row[2])
         promotion_match = _PROMOTION_PATTERN.search(str(row[4] or ""))
         if promotion_match is None:
-            raise KstLegacyDatabaseError("老版快商通推广 ID 无效")
+            raise KstLegacyDatabaseError(
+                "老版快商通推广 ID 无效",
+                category="identity_mapping",
+            )
         promotion_id = promotion_match.group(1)
         tags = normalize_legacy_tags(*row[7:12])
         conversations.append(

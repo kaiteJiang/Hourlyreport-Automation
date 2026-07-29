@@ -5,6 +5,8 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from gui.kst_api_manager import KstApiManager
+from modules.kst_local.discovery import KstDiscoveryError
+from modules.kst_local.legacy_db_reader import KstLegacyDatabaseError
 
 
 @pytest.fixture(scope="module")
@@ -212,6 +214,58 @@ def test_error_change_logs_immediately(qapp, tmp_path):
         manager.stop()
 
 
+def test_typed_failure_category_changes_log_immediately_and_still_deduplicates(
+    qapp,
+    tmp_path,
+):
+    now = [0.0]
+    messages = []
+    attempts = []
+    failures = [
+        KstDiscoveryError(
+            "private process path mismatch",
+            category="client_not_running",
+        ),
+        KstLegacyDatabaseError(
+            "private locked database path",
+            category="database_busy_or_timeout",
+        ),
+    ]
+
+    class TypedFailingRegistry:
+        def __init__(self, *_args):
+            pass
+
+        def refresh(self):
+            attempts.append(1)
+            raise failures[min(len(attempts) - 1, 1)]
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=TypedFailingRegistry,
+        monotonic=lambda: now[0],
+    )
+    manager.log_message.connect(messages.append)
+
+    manager.start()
+    try:
+        wait_for_attempts(attempts, 1)
+        assert wait_until(lambda: len(messages) == 1)
+        trigger_attempts(manager, attempts, 1)
+        assert wait_until(lambda: len(messages) == 2)
+        trigger_attempts(manager, attempts, 2)
+        QApplication.processEvents()
+        assert messages == ["客户端未运行", "数据库忙或读取超时"]
+
+        now[0] = 301.0
+        trigger_attempts(manager, attempts, 1)
+        assert wait_until(lambda: len(messages) == 3)
+        assert messages[-1] == "数据库忙或读取超时"
+    finally:
+        manager.stop()
+
+
 @pytest.mark.parametrize(
     ("error_message", "expected_message"),
     [
@@ -326,6 +380,112 @@ def test_rescan_is_immediate_only_after_manager_started(qapp, tmp_path):
         manager._retry_timer.stop()
         manager.rescan()
         wait_for_attempts(attempts, 2)
+    finally:
+        manager.stop()
+
+
+def test_rescan_forces_registry_refresh_and_forwards_generation_cancel_event(
+    qapp,
+    tmp_path,
+):
+    server = FakeServer()
+    calls = []
+    events = []
+
+    class ForceAwareRegistry(FakeRegistry):
+        def refresh(self, *, force=False, cancel_event=None):
+            calls.append(force)
+            events.append(cancel_event)
+
+        def health(self, *, cancel_event=None):
+            events.append(cancel_event)
+            return super().health()
+
+    registry = ForceAwareRegistry()
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=lambda _root: registry,
+        server_factory=lambda *_args, **_kwargs: server,
+        retry_interval_ms=5_000,
+    )
+    manager.start()
+    try:
+        assert wait_until(server.started.is_set)
+        initial_event = next(event for event in events if event is not None)
+        assert calls == [False]
+
+        manager.rescan()
+        assert wait_until(lambda: calls == [False, True])
+        assert all(event is initial_event for event in events if event is not None)
+    finally:
+        manager.stop()
+
+    assert initial_event.is_set() is True
+
+
+def test_stop_cancels_registry_refresh_cooperatively(qapp, tmp_path):
+    entered = threading.Event()
+    exited = threading.Event()
+    received = []
+
+    class CancellableRegistry:
+        def __init__(self, *_args):
+            pass
+
+        def refresh(self, *, cancel_event=None):
+            received.append(cancel_event)
+            entered.set()
+            assert cancel_event is not None
+            cancel_event.wait(timeout=1)
+            exited.set()
+
+        def health(self):
+            return {
+                "status": "not_ready",
+                "required_endpoints_available": False,
+            }
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=CancellableRegistry,
+    )
+    manager.start()
+    assert entered.wait(timeout=1)
+
+    manager.stop()
+
+    assert exited.wait(timeout=1)
+    assert received[0].is_set() is True
+
+
+def test_registry_health_failure_category_reaches_manager_status(
+    qapp,
+    tmp_path,
+):
+    messages = []
+
+    class InactiveRegistry(FakeRegistry):
+        def health(self, *, cancel_event=None):
+            return {
+                "status": "not_ready",
+                "required_endpoints_available": False,
+                "error_category": "inactive_log",
+                "error_detail": "未检测到活动身份",
+            }
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=InactiveRegistry,
+    )
+    manager.log_message.connect(messages.append)
+
+    manager.start()
+    try:
+        assert wait_until(lambda: messages == ["未检测到活动身份"])
+        assert manager.status_detail() == "未检测到活动身份"
     finally:
         manager.stop()
 

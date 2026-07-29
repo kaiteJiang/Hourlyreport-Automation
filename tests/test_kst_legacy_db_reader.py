@@ -121,16 +121,19 @@ def assert_read_fails_without_modifying_sources(
     target_date: str,
     *,
     match: str | None = None,
+    category: str | None = None,
     **kwargs,
 ) -> None:
     paths = (installation.history_db, *installation.message_database_paths)
     before = {path: path.read_bytes() for path in paths}
-    with pytest.raises(KstLegacyDatabaseError, match=match):
+    with pytest.raises(KstLegacyDatabaseError, match=match) as captured:
         read_legacy_conversations(
             installation,
             target_date,
             **kwargs,
         )
+    if category is not None:
+        assert captured.value.category == category
     assert {path: path.read_bytes() for path in paths} == before
 
 
@@ -220,6 +223,7 @@ def test_missing_promotion_id_fails_closed(legacy_installation):
     assert_read_fails_without_modifying_sources(
         legacy_installation,
         "2026-07-29",
+        category="identity_mapping",
     )
 
 
@@ -383,6 +387,33 @@ def test_promotion_ids_use_only_live_authorized_records(legacy_installation):
     before = {path: path.read_bytes() for path in paths}
     assert read_legacy_promotion_ids(legacy_installation) == {"10001"}
     assert {path: path.read_bytes() for path in paths} == before
+
+
+def test_complete_empty_schema_is_not_a_ready_legacy_identity(
+    legacy_installation,
+):
+    with pytest.raises(KstLegacyDatabaseError) as captured:
+        validate_legacy_read_capability(legacy_installation)
+
+    assert captured.value.category == "identity_mapping"
+    assert str(captured.value) == "老版快商通身份缺少可用推广 ID"
+
+
+def test_database_lock_has_safe_busy_timeout_category(
+    legacy_installation,
+):
+    live_db = legacy_installation.message_database_paths[0]
+    locker = sqlite3.connect(live_db)
+    locker.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(KstLegacyDatabaseError) as captured:
+            validate_legacy_read_capability(legacy_installation)
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert captured.value.category == "database_busy_or_timeout"
+    assert str(captured.value) == "老版快商通数据库忙或读取超时"
 
 
 def test_readiness_capability_uses_one_absolute_deadline(

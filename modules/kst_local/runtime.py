@@ -9,9 +9,6 @@ from typing import Any
 from modules.kst_local.api_client import KstApiClient
 from modules.kst_local.db_reader import read_cache_candidates
 from modules.kst_local.discovery import discover_installation
-from modules.kst_local.legacy_db_reader import (
-    validate_legacy_read_capability,
-)
 from modules.kst_local.log_source import parse_cached_log_snapshot
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
@@ -50,11 +47,13 @@ class LegacyKstRuntime:
     service: Any
 
     def health(self) -> dict[str, Any]:
-        ready = True
-        try:
-            validate_legacy_read_capability(self.installation)
-        except Exception:
-            ready = False
+        required_paths = (
+            self.installation.history_db,
+            *self.installation.message_database_paths,
+        )
+        ready = bool(self.installation.promotion_ids) and all(
+            path.is_file() for path in required_paths
+        )
         return {
             "status": "ok" if ready else "not_ready",
             "installation": self.installation.safe_diagnostics(),

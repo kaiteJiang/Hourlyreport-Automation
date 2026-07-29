@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -125,15 +127,21 @@ def legacy_installation(tmp_path):
     for path in (first_live_db, second_live_db):
         _create_message_database(path)
     root = tmp_path / "legacy"
+    root.mkdir()
+    (root / "OnlineCS.exe").write_bytes(b"MZ")
+    log_dir = tmp_path / "legacy-log"
+    log_dir.mkdir()
+    (log_dir / "active.log").write_text("active", encoding="utf-8")
     return LegacyKstInstallation(
         root=root,
         executable=root / "OnlineCS.exe",
         version="7.03.17",
         identity="legacy-id",
-        log_dir=tmp_path / "legacy-log",
+        log_dir=log_dir,
         data_root=tmp_path / "legacy-db",
         history_db=history_db,
         message_database_paths=(first_live_db, second_live_db),
+        promotion_ids=frozenset({"10001"}),
     )
 
 
@@ -150,10 +158,12 @@ def test_backend_dispatches_legacy_without_electron_snapshot(
         },
         "2026-07-29",
         installation=legacy_installation,
+        process_paths=[legacy_installation.executable],
+        now_timestamp=time.time(),
     )
 
     assert isinstance(runtime, LegacyKstRuntime)
-    assert runtime.installation is legacy_installation
+    assert runtime.installation == legacy_installation
     health = runtime.health()
     assert health["status"] == "ok"
     assert health["read_only_database_available"] is True
@@ -200,7 +210,7 @@ def test_backend_preserves_electron_builder(
     ("installation_fixture", "reader_name", "expected"),
     [
         ("electron_installation", "read_identity_promotion_ids", {"10001"}),
-        ("legacy_installation", "read_legacy_promotion_ids", {"20001"}),
+        ("legacy_installation", "inspect_legacy_read_capability", {"20001"}),
     ],
 )
 def test_backend_dispatches_promotion_id_reader(
@@ -211,18 +221,43 @@ def test_backend_dispatches_promotion_id_reader(
     expected,
 ):
     installation = request.getfixturevalue(installation_fixture)
-    monkeypatch.setattr(backend, reader_name, lambda _item: expected)
+    monkeypatch.setattr(
+        backend,
+        reader_name,
+        lambda _item, **_kwargs: expected,
+    )
+    if isinstance(installation, LegacyKstInstallation):
+        installation = replace(installation, promotion_ids=None)
 
     assert read_installation_promotion_ids(installation) == expected
 
 
-def test_legacy_readiness_accepts_valid_empty_databases(
+def test_legacy_readiness_rejects_complete_but_unbound_empty_databases(
     legacy_installation,
 ):
-    assert installation_ready(
-        legacy_installation,
-        "2026-07-29",
-    ) is True
+    empty = replace(legacy_installation, promotion_ids=None)
+
+    with pytest.raises(Exception) as captured:
+        read_installation_promotion_ids(empty)
+
+    assert captured.value.category == "identity_mapping"
+
+
+def test_legacy_runtime_builder_rejects_uninspected_empty_identity(
+    legacy_installation,
+):
+    empty = replace(legacy_installation, promotion_ids=None)
+
+    with pytest.raises(Exception) as captured:
+        build_installation_runtime(
+            {"kst": {"promotion_id_accounts": {"10001": "账户A"}}},
+            "2026-07-29",
+            installation=empty,
+            process_paths=[empty.executable],
+            now_timestamp=time.time(),
+        )
+
+    assert captured.value.category == "identity_mapping"
 
 
 @pytest.mark.parametrize(
@@ -245,12 +280,11 @@ def test_legacy_readiness_and_health_reject_incomplete_live_data(
         _insert_history(legacy_installation.history_db, rec_id)
         _insert_history(legacy_installation.history_db, rec_id)
 
-    assert installation_ready(
-        legacy_installation,
-        "2026-07-29",
-    ) is False
+    unchecked = replace(legacy_installation, promotion_ids=None)
+    with pytest.raises(Exception):
+        read_installation_promotion_ids(unchecked)
     health = LegacyKstRuntime(
-        installation=legacy_installation,
+        installation=unchecked,
         service=object(),
     ).health()
     assert health["status"] == "not_ready"
@@ -274,16 +308,16 @@ def test_legacy_readiness_and_health_reject_invalid_declared_database(
     invalid_case,
 ):
     invalid_path = tmp_path / f"{invalid_case}.db"
-    invalid_installation = legacy_installation
+    invalid_installation = replace(legacy_installation, promotion_ids=None)
     if invalid_case == "missing_history":
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             history_db=invalid_path,
         )
     elif invalid_case == "corrupt_history":
         invalid_path.write_bytes(b"not-a-sqlite-database")
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             history_db=invalid_path,
         )
     elif invalid_case == "missing_history_table":
@@ -291,7 +325,7 @@ def test_legacy_readiness_and_health_reject_invalid_declared_database(
             connection.execute("CREATE TABLE OTHER_TABLE (id INTEGER)")
             connection.commit()
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             history_db=invalid_path,
         )
     elif invalid_case == "missing_history_column":
@@ -300,7 +334,7 @@ def test_legacy_readiness_and_health_reject_invalid_declared_database(
             columns=HISTORY_COLUMNS[:-1],
         )
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             history_db=invalid_path,
         )
     elif invalid_case == "missing_message_table":
@@ -308,7 +342,7 @@ def test_legacy_readiness_and_health_reject_invalid_declared_database(
             connection.execute("CREATE TABLE OTHER_TABLE (id INTEGER)")
             connection.commit()
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             message_database_paths=(invalid_path,),
         )
     elif invalid_case == "missing_message_column":
@@ -317,14 +351,12 @@ def test_legacy_readiness_and_health_reject_invalid_declared_database(
             columns=("recId TEXT",),
         )
         invalid_installation = replace(
-            legacy_installation,
+            invalid_installation,
             message_database_paths=(invalid_path,),
         )
 
-    assert installation_ready(
-        invalid_installation,
-        "2026-07-29",
-    ) is False
+    with pytest.raises(Exception):
+        read_installation_promotion_ids(invalid_installation)
     runtime = LegacyKstRuntime(
         installation=invalid_installation,
         service=object(),
@@ -359,6 +391,75 @@ def test_legacy_runtime_state_tracks_every_database(
         "2026-07-29",
     )
     assert after != before
+
+
+def test_legacy_runtime_state_tracks_sidecars_and_newly_enumerated_shards(
+    legacy_installation,
+):
+    before = installation_runtime_state(
+        legacy_installation,
+        "2026-07-29",
+    )
+
+    history_wal = legacy_installation.history_db.with_name(
+        legacy_installation.history_db.name + "-wal"
+    )
+    history_wal.write_bytes(b"wal")
+    with_wal = installation_runtime_state(
+        legacy_installation,
+        "2026-07-29",
+    )
+    assert with_wal != before
+
+    new_shard = (
+        legacy_installation.history_db.parent
+        / "agent"
+        / "07291200-onlie"
+        / "new_CS.pdb"
+    )
+    new_shard.parent.mkdir(parents=True)
+    _create_message_database(new_shard)
+    with_new_shard = installation_runtime_state(
+        legacy_installation,
+        "2026-07-29",
+    )
+
+    assert with_new_shard != with_wal
+    assert str(new_shard.resolve()) in with_new_shard[3]
+
+
+def test_legacy_runtime_builder_reenumerates_shards_and_carries_cancel_event(
+    legacy_installation,
+):
+    new_shard = (
+        legacy_installation.history_db.parent
+        / "agent"
+        / "07291200-onlie"
+        / "new_CS.pdb"
+    )
+    new_shard.parent.mkdir(parents=True)
+    _create_message_database(new_shard)
+    cancel_event = threading.Event()
+
+    runtime = build_installation_runtime(
+        {
+            "kst": {
+                "promotion_id_accounts": {
+                    "10001": "账户A",
+                }
+            }
+        },
+        "2026-07-29",
+        installation=legacy_installation,
+        cancel_event=cancel_event,
+        process_paths=[legacy_installation.executable],
+        now_timestamp=time.time(),
+    )
+
+    assert new_shard.resolve() in runtime.installation.message_database_paths
+    cancel_event.set()
+    with pytest.raises(Exception, match="取消"):
+        runtime.service.collect("2026-07-29")
 
 
 @pytest.mark.parametrize(

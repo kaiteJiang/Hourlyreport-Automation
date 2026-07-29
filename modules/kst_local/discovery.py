@@ -14,6 +14,15 @@ from modules.kst_local.subprocess_utils import hidden_subprocess_kwargs
 class KstDiscoveryError(RuntimeError):
     """商务通安装或当前身份无法安全定位。"""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "discovery_failed",
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+
 
 def _active_log_max_age_seconds() -> float:
     raw = os.environ.get("KST_ACTIVE_LOG_MAX_AGE_SECONDS", "300")
@@ -281,12 +290,18 @@ def discover_all_installations(
     root: str | Path,
     *,
     require_running_process: bool = True,
+    cancel_event: object | None = None,
 ) -> list[KstInstallationLike]:
     from modules.kst_local.legacy_discovery import discover_legacy_installations
     from modules.kst_local.machine_settings import load_kst_machine_settings
 
     settings = load_kst_machine_settings(root)
-    configured_root = settings.installation_root
+    environment_root = os.environ.get("KST_INSTALLATION_ROOT")
+    configured_root = settings.installation_root or (
+        Path(environment_root).expanduser().resolve()
+        if environment_root
+        else None
+    )
     is_explicit_legacy_root = bool(
         configured_root and (configured_root / "OnlineCS.exe").is_file()
     )
@@ -295,27 +310,30 @@ def discover_all_installations(
     )
     legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
-    try:
-        installations.extend(
-            discover_installations(
-                explicit_root=electron_explicit_root,
-                require_running_process=require_running_process,
+    if not is_explicit_legacy_root:
+        try:
+            installations.extend(
+                discover_installations(
+                    explicit_root=electron_explicit_root,
+                    require_running_process=require_running_process,
+                )
             )
-        )
-    except KstDiscoveryError:
-        if electron_explicit_root is not None:
-            raise
-    try:
-        installations.extend(
-            discover_legacy_installations(
-                explicit_root=legacy_explicit_root,
-                explicit_data_root=settings.data_root,
-                require_running_process=require_running_process,
+        except KstDiscoveryError:
+            if electron_explicit_root is not None:
+                raise
+    if configured_root is None or is_explicit_legacy_root:
+        try:
+            installations.extend(
+                discover_legacy_installations(
+                    explicit_root=legacy_explicit_root,
+                    explicit_data_root=settings.data_root,
+                    require_running_process=require_running_process,
+                    cancel_event=cancel_event,
+                )
             )
-        )
-    except KstDiscoveryError:
-        if legacy_explicit_root is not None or settings.data_root is not None:
-            raise
+        except KstDiscoveryError:
+            if legacy_explicit_root is not None or settings.data_root is not None:
+                raise
     unique: dict[tuple[str, Path, str], KstInstallationLike] = {}
     for installation in installations:
         client_family = getattr(installation, "client_family", "electron")

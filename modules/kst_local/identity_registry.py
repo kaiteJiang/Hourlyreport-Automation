@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
 from datetime import date
+import inspect
 from pathlib import Path
 import threading
 import time
@@ -9,6 +10,7 @@ from typing import Any, Callable
 
 from modules.kst_local.backend import (
     build_installation_runtime,
+    installation_active,
     installation_ready,
     installation_runtime_state,
     read_installation_promotion_ids,
@@ -33,6 +35,55 @@ from modules.project_config import (
 
 class KstIdentityMappingError(RuntimeError):
     """项目与本机快商通身份无法建立安全的一对一映射。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "identity_mapping",
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+_SAFE_FAILURE_DETAILS = {
+    "client_not_running": "客户端未运行",
+    "client_path_mismatch": "客户端程序与运行进程不匹配",
+    "inactive_log": "未检测到活动身份",
+    "database_incompatible": "数据库结构不兼容",
+    "database_busy_or_timeout": "数据库忙或读取超时",
+    "identity_mapping": "快商通身份映射未就绪",
+}
+
+
+def _safe_failure(error: BaseException) -> tuple[str, str]:
+    category = str(
+        getattr(error, "category", "identity_mapping")
+    ).strip()
+    if category not in _SAFE_FAILURE_DETAILS:
+        category = "identity_mapping"
+    return category, _SAFE_FAILURE_DETAILS[category]
+
+
+def _call_with_supported_keywords(
+    function: Callable[..., Any],
+    *args: Any,
+    **keywords: Any,
+) -> Any:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return function(*args)
+    accepts_keywords = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    supported = {
+        key: value
+        for key, value in keywords.items()
+        if accepts_keywords or key in signature.parameters
+    }
+    return function(*args, **supported)
 
 
 def _project_promotion_ids(project: dict[str, Any]) -> set[str]:
@@ -148,6 +199,9 @@ class KstIdentityRegistry:
         endpoint_checker: Callable[
             [KstInstallationLike, str], bool
         ] = installation_ready,
+        liveness_checker: Callable[
+            [KstInstallationLike], bool
+        ] = installation_active,
         promotion_cache_ttl_seconds: float = 300,
         runtime_cache_ttl_seconds: float = 60,
         runtime_cache_max_entries: int = 64,
@@ -156,9 +210,10 @@ class KstIdentityRegistry:
         self.root = Path(root)
         self._projects_loader = projects_loader
         self._installations_loader = installations_loader or (
-            lambda: discover_all_installations(
+            lambda *, cancel_event=None: discover_all_installations(
                 self.root,
                 require_running_process=True,
+                cancel_event=cancel_event,
             )
         )
         self._promotion_id_reader = promotion_id_reader
@@ -167,6 +222,7 @@ class KstIdentityRegistry:
         self._runtime_builder = runtime_builder
         self._runtime_state_reader = runtime_state_reader
         self._endpoint_checker = endpoint_checker
+        self._liveness_checker = liveness_checker
         self._promotion_cache_ttl_seconds = max(
             0.0,
             float(promotion_cache_ttl_seconds),
@@ -197,6 +253,8 @@ class KstIdentityRegistry:
         self._identity_error_count = 0
         self._identity_count = 0
         self._refreshed = False
+        self._last_error_category: str | None = None
+        self._last_error_detail: str | None = None
 
     @staticmethod
     def _installation_cache_key(
@@ -223,6 +281,8 @@ class KstIdentityRegistry:
     def _promotion_ids_for(
         self,
         installation: KstInstallationLike,
+        *,
+        cancel_event: Any = None,
     ) -> set[str]:
         key = self._installation_cache_key(installation)
         now = self._monotonic()
@@ -232,15 +292,35 @@ class KstIdentityRegistry:
             age = now - read_at
             if 0 <= age < self._promotion_cache_ttl_seconds:
                 return set(values)
-        values = frozenset(self._promotion_id_reader(installation))
+        values = frozenset(
+            _call_with_supported_keywords(
+                self._promotion_id_reader,
+                installation,
+                cancel_event=cancel_event,
+            )
+        )
         self._promotion_cache[key] = (now, values)
         return set(values)
 
-    def refresh(self) -> None:
+    def refresh(
+        self,
+        *,
+        force: bool = False,
+        cancel_event: Any = None,
+    ) -> None:
         with self._refresh_lock:
-            self._refresh_unlocked()
+            if force:
+                self._promotion_cache.clear()
+                with self._runtime_lock:
+                    self._runtime_cache.clear()
+            self._refresh_unlocked(cancel_event=cancel_event)
 
-    def _refresh_unlocked(self) -> None:
+    def _refresh_unlocked(self, *, cancel_event: Any = None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise KstDiscoveryError(
+                "快商通读取已取消",
+                category="database_busy_or_timeout",
+            )
         projects = self._projects_loader(self.root)
         project_map = {
             str(project.get("project_id") or ""): project
@@ -248,10 +328,15 @@ class KstIdentityRegistry:
             if project.get("project_id")
         }
         promotion_index = build_project_promotion_index(projects)
-        installations = self._installations_loader()
+        installations = _call_with_supported_keywords(
+            self._installations_loader,
+            cancel_event=cancel_event,
+        )
         bindings: dict[str, KstInstallationLike] = {}
         project_errors: dict[str, str] = {}
         identity_error_count = 0
+        last_error_category: str | None = None
+        last_error_detail: str | None = None
 
         candidates: dict[
             str,
@@ -261,25 +346,51 @@ class KstIdentityRegistry:
         unready_projects: set[str] = set()
         target_date = date.today().isoformat()
         for installation in installations:
+            if cancel_event is not None and cancel_event.is_set():
+                raise KstDiscoveryError(
+                    "快商通读取已取消",
+                    category="database_busy_or_timeout",
+                )
             try:
-                known_ids = self._promotion_ids_for(installation)
+                known_ids = self._promotion_ids_for(
+                    installation,
+                    cancel_event=cancel_event,
+                )
                 matched_projects = {
                     promotion_index[promotion_id]
                     for promotion_id in known_ids
                     if promotion_id in promotion_index
                 }
-                if not self._endpoint_checker(installation, target_date):
+                if not _call_with_supported_keywords(
+                    self._endpoint_checker,
+                    installation,
+                    target_date,
+                    cancel_event=cancel_event,
+                ):
                     identity_error_count += 1
                     unready_projects.update(matched_projects)
+                    last_error_category = "identity_mapping"
+                    last_error_detail = _SAFE_FAILURE_DETAILS[
+                        last_error_category
+                    ]
                     continue
-            except Exception:
+            except Exception as exc:
                 identity_error_count += 1
+                (
+                    last_error_category,
+                    last_error_detail,
+                ) = _safe_failure(exc)
                 continue
             if len(matched_projects) == 1:
                 candidates[next(iter(matched_projects))].append(installation)
             elif len(matched_projects) > 1:
                 conflicted_projects.update(matched_projects)
 
+        if cancel_event is not None and cancel_event.is_set():
+            raise KstDiscoveryError(
+                "快商通读取已取消",
+                category="database_busy_or_timeout",
+            )
         for project_id in sorted(project_map):
             project_candidates = candidates.get(project_id, [])
             if project_id in unready_projects and not project_candidates:
@@ -304,6 +415,8 @@ class KstIdentityRegistry:
             self._project_errors = project_errors
             self._identity_error_count = identity_error_count
             self._refreshed = True
+            self._last_error_category = last_error_category
+            self._last_error_detail = last_error_detail
             if changed_projects:
                 with self._runtime_lock:
                     for key in tuple(self._runtime_cache):
@@ -331,16 +444,33 @@ class KstIdentityRegistry:
             )
         return installation
 
-    def build_runtime(self, project_id: str, target_date: str) -> Any:
+    def build_runtime(
+        self,
+        project_id: str,
+        target_date: str,
+        *,
+        cancel_event: Any = None,
+    ) -> Any:
         with self._state_lock:
-            return self._build_runtime_unlocked(project_id, target_date)
+            return self._build_runtime_unlocked(
+                project_id,
+                target_date,
+                cancel_event=cancel_event,
+            )
 
     def _build_runtime_unlocked(
         self,
         project_id: str,
         target_date: str,
+        *,
+        cancel_event: Any = None,
     ) -> Any:
         installation = self._installation_for_unlocked(project_id)
+        _call_with_supported_keywords(
+            self._liveness_checker,
+            installation,
+            cancel_event=cancel_event,
+        )
         project = self._project_loader(self.root, project_id)
         snapshot: AutomaticSourceSnapshot | None = None
         if isinstance(installation, KstInstallation):
@@ -351,10 +481,12 @@ class KstIdentityRegistry:
             )
         state = (
             project,
-            self._runtime_state_reader(
+            _call_with_supported_keywords(
+                self._runtime_state_reader,
                 installation,
                 target_date,
                 snapshot,
+                cancel_event=cancel_event,
             ),
         )
         key = (project_id, target_date)
@@ -371,11 +503,13 @@ class KstIdentityRegistry:
                     self._runtime_cache.move_to_end(key)
                     return runtime
             config = self._config_builder(project, {})
-            runtime = self._runtime_builder(
+            runtime = _call_with_supported_keywords(
+                self._runtime_builder,
                 config,
                 target_date,
                 installation=installation,
                 snapshot=snapshot,
+                cancel_event=cancel_event,
             )
             self._runtime_cache[key] = (now, state, runtime)
             self._runtime_cache.move_to_end(key)
@@ -383,18 +517,36 @@ class KstIdentityRegistry:
                 self._runtime_cache.popitem(last=False)
             return runtime
 
-    def health(self) -> dict[str, Any]:
+    def health(self, *, cancel_event: Any = None) -> dict[str, Any]:
         with self._state_lock:
-            return self._health_unlocked()
+            return self._health_unlocked(cancel_event=cancel_event)
 
-    def _health_unlocked(self) -> dict[str, Any]:
+    def _health_unlocked(
+        self,
+        *,
+        cancel_event: Any = None,
+    ) -> dict[str, Any]:
         all_project_ids = sorted(self._projects)
         bound_project_ids = sorted(self._bindings)
         unbound_project_ids = sorted(
             set(all_project_ids) - set(bound_project_ids)
         )
         ready = self._refreshed and bool(bound_project_ids)
-        return {
+        error_category = self._last_error_category
+        error_detail = self._last_error_detail
+        if ready:
+            for installation in self._bindings.values():
+                try:
+                    _call_with_supported_keywords(
+                        self._liveness_checker,
+                        installation,
+                        cancel_event=cancel_event,
+                    )
+                except Exception as exc:
+                    ready = False
+                    error_category, error_detail = _safe_failure(exc)
+                    break
+        health = {
             "status": "ok" if ready else "not_ready",
             "required_endpoints_available": ready,
             "project_routing": True,
@@ -405,3 +557,12 @@ class KstIdentityRegistry:
                 len(self._project_errors) + self._identity_error_count
             ),
         }
+        if not ready:
+            health["error_category"] = (
+                error_category or "identity_mapping"
+            )
+            health["error_detail"] = (
+                error_detail
+                or _SAFE_FAILURE_DETAILS["identity_mapping"]
+            )
+        return health

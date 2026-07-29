@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import inspect
 import json
 import threading
 import time
@@ -21,6 +22,60 @@ from modules.kst_local.identity_registry import KstIdentityRegistry
 
 
 Probe = Callable[[str, str], bool | tuple[bool, str]]
+
+
+_TYPED_FAILURE_MESSAGES = {
+    "client_not_running": "客户端未运行",
+    "client_path_mismatch": "客户端程序与运行进程不匹配",
+    "inactive_log": "未检测到活动身份",
+    "database_incompatible": "数据库结构不兼容",
+    "database_busy_or_timeout": "数据库忙或读取超时",
+    "identity_mapping": "快商通身份映射未就绪",
+    "installation_root": "快商通客户端目录无效",
+    "data_root": "快商通数据目录无效",
+    "port_in_use": "商务通本地 API 端口被占用",
+    "authentication": "商务通本地 API 认证配置无效",
+}
+
+
+class _RegistryHealthFailure(RuntimeError):
+    def __init__(self, category: str, detail: str) -> None:
+        super().__init__(detail)
+        self.category = category
+
+
+def _call_with_supported_keywords(
+    function: Callable[..., Any],
+    *args: Any,
+    **keywords: Any,
+) -> Any:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return function(*args)
+    accepts_keywords = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    supported = {
+        key: value
+        for key, value in keywords.items()
+        if accepts_keywords or key in signature.parameters
+    }
+    return function(*args, **supported)
+
+
+def _health_failure(
+    health: dict[str, Any],
+    fallback: str,
+) -> BaseException:
+    category = str(health.get("error_category") or "").strip()
+    if category in _TYPED_FAILURE_MESSAGES:
+        return _RegistryHealthFailure(
+            category,
+            _TYPED_FAILURE_MESSAGES[category],
+        )
+    return RuntimeError(fallback)
 
 
 def probe_kst_health(
@@ -113,6 +168,7 @@ class KstApiManager(QObject):
         self._generation = 0
         self._cancel_event = threading.Event()
         self._rescan_pending = False
+        self._force_refresh_requested = False
         self._closed_server_ids: set[int] = set()
         base_retry_ms = max(10, int(retry_interval_ms))
         self._retry_intervals_ms = (
@@ -150,6 +206,7 @@ class KstApiManager(QObject):
             self._generation += 1
             self._cancel_event = threading.Event()
             self._rescan_pending = False
+            self._force_refresh_requested = False
             self._retiring_worker_restart = None
             self._retry_index = 0
             self._last_error_key = None
@@ -176,6 +233,7 @@ class KstApiManager(QObject):
             self._ready = False
             self._last_registry_refresh_at = None
             self._rescan_pending = False
+            self._force_refresh_requested = False
             detail = "商务通 API 已停止"
             self._detail = detail
             generation = self._generation
@@ -196,6 +254,7 @@ class KstApiManager(QObject):
             self._retry_index = 0
             self._last_error_key = None
             self._last_error_log_at = None
+            self._force_refresh_requested = True
             worker_running = (
                 self._worker is not None and self._worker.is_alive()
             )
@@ -291,9 +350,16 @@ class KstApiManager(QObject):
             )
             generation = self._generation
             cancel_event = self._cancel_event
+            force_refresh = self._force_refresh_requested
+            self._force_refresh_requested = False
             self._worker = threading.Thread(
                 target=self._run_worker,
-                args=(target, generation, cancel_event),
+                args=(
+                    target,
+                    generation,
+                    cancel_event,
+                    force_refresh,
+                ),
                 name="kst-api-manager",
                 daemon=True,
             )
@@ -305,13 +371,21 @@ class KstApiManager(QObject):
 
     def _run_worker(
         self,
-        target: Callable[[int, threading.Event], int | None],
+        target: Callable[
+            [int, threading.Event, bool],
+            int | None,
+        ],
         generation: int,
         cancel_event: threading.Event,
+        force_refresh: bool,
     ) -> None:
         delay_ms: int | None = None
         try:
-            delay_ms = target(generation, cancel_event)
+            delay_ms = target(
+                generation,
+                cancel_event,
+                force_refresh,
+            )
         finally:
             current = threading.current_thread()
             immediate = False
@@ -400,6 +474,14 @@ class KstApiManager(QObject):
     def _safe_failure(
         error: BaseException | str,
     ) -> tuple[str, str]:
+        typed_category = str(
+            getattr(error, "category", "")
+        ).strip()
+        if typed_category in _TYPED_FAILURE_MESSAGES:
+            return (
+                typed_category,
+                _TYPED_FAILURE_MESSAGES[typed_category],
+            )
         text = str(error or "").strip()
         lowered = text.casefold()
         if any(
@@ -431,6 +513,17 @@ class KstApiManager(QObject):
             "数据库" in text and "不兼容" in text
         ):
             return "database_incompatible", "数据库结构不兼容"
+        if (
+            "数据库忙" in text
+            or "读取超时" in text
+            or "database is locked" in lowered
+        ):
+            return (
+                "database_busy_or_timeout",
+                "数据库忙或读取超时",
+            )
+        if "活动身份" in text:
+            return "inactive_log", "未检测到活动身份"
         if (
             "address already in use" in lowered
             or "winerror 10048" in lowered
@@ -478,6 +571,7 @@ class KstApiManager(QObject):
         self,
         generation: int,
         cancel_event: threading.Event,
+        force_refresh: bool = False,
     ) -> int | None:
         with self._lock:
             if (
@@ -488,11 +582,18 @@ class KstApiManager(QObject):
             registry = self._registry
             last_refresh = self._last_registry_refresh_at
         now = self._monotonic()
-        if registry is not None and last_refresh is not None:
+        if (
+            not force_refresh
+            and registry is not None
+            and last_refresh is not None
+        ):
             age = now - last_refresh
             if 0 <= age < self._registry_refresh_interval_seconds:
                 try:
-                    health = registry.health()
+                    health = _call_with_supported_keywords(
+                        registry.health,
+                        cancel_event=cancel_event,
+                    )
                     ready = (
                         health.get("status") == "ok"
                         and health.get("required_endpoints_available") is True
@@ -508,8 +609,15 @@ class KstApiManager(QObject):
         try:
             if registry is None:
                 registry = self._registry_factory(self._root)
-            registry.refresh()
-            health = registry.health()
+            _call_with_supported_keywords(
+                registry.refresh,
+                force=force_refresh,
+                cancel_event=cancel_event,
+            )
+            health = _call_with_supported_keywords(
+                registry.health,
+                cancel_event=cancel_event,
+            )
             ready = (
                 health.get("status") == "ok"
                 and health.get("required_endpoints_available") is True
@@ -533,26 +641,39 @@ class KstApiManager(QObject):
         return self._record_failure(
             generation,
             cancel_event,
-            "商务通登录身份尚未就绪",
+            _health_failure(
+                health,
+                "商务通登录身份尚未就绪",
+            ),
         )
 
     def _service_for(self, project_id: str, request_date: str) -> Any:
         with self._lock:
             registry = self._registry
+            cancel_event = self._cancel_event
         if registry is None:
             raise RuntimeError("KST identity registry is not ready")
-        return registry.build_runtime(project_id, request_date).service
+        return _call_with_supported_keywords(
+            registry.build_runtime,
+            project_id,
+            request_date,
+            cancel_event=cancel_event,
+        ).service
 
     def _registry_health(self) -> dict[str, Any]:
         with self._lock:
             registry = self._registry
+            cancel_event = self._cancel_event
         if registry is None:
             return {
                 "status": "not_ready",
                 "required_endpoints_available": False,
                 "project_routing": True,
             }
-        return registry.health()
+        return _call_with_supported_keywords(
+            registry.health,
+            cancel_event=cancel_event,
+        )
 
     def _close_server_once(self, server: Any) -> None:
         server_id = id(server)
@@ -625,6 +746,7 @@ class KstApiManager(QObject):
         self,
         generation: int,
         cancel_event: threading.Event,
+        force_refresh: bool = False,
     ) -> int | None:
         try:
             url = "http://127.0.0.1:18766"
@@ -674,8 +796,15 @@ class KstApiManager(QObject):
                 )
 
             registry = self._registry_factory(self._root)
-            registry.refresh()
-            health = registry.health()
+            _call_with_supported_keywords(
+                registry.refresh,
+                force=force_refresh,
+                cancel_event=cancel_event,
+            )
+            health = _call_with_supported_keywords(
+                registry.health,
+                cancel_event=cancel_event,
+            )
             if not (
                 health.get("status") == "ok"
                 and health.get("required_endpoints_available") is True
@@ -683,7 +812,10 @@ class KstApiManager(QObject):
                 return self._record_failure(
                     generation,
                     cancel_event,
-                    "商务通自动数据源尚未就绪",
+                    _health_failure(
+                        health,
+                        "商务通自动数据源尚未就绪",
+                    ),
                 )
             if not self._is_active(generation, cancel_event):
                 return None

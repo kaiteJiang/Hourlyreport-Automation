@@ -52,7 +52,9 @@ class LegacyKstConversationService:
                     cancel_event=self._cancel_event,
                 )
             except KstLegacyDatabaseError as exc:
-                raise KstServiceError(str(exc)) from None
+                service_error = KstServiceError(str(exc))
+                service_error.category = exc.category
+                raise service_error from None
             for conversation in conversations:
                 self._check_cancelled()
                 if conversation.promotion_id not in promotion_map:
