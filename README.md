@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.29.116-3B82F6?style=for-the-badge" alt="Version 2026.7.29.116">
+  <img src="https://img.shields.io/badge/version-2026.7.29.117-3B82F6?style=for-the-badge" alt="Version 2026.7.29.117">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Local-First-16A34A?style=for-the-badge" alt="Local First">
   <img src="https://img.shields.io/badge/Excel-Safe-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -38,7 +38,7 @@
   <img src="docs/images/desktop-console.png" width="900" alt="蚁之力竞价数据自动化桌面控制台">
 </p>
 
-<p align="center"><sub>v2026.7.29.116 桌面工作台：项目、数据模式、小时报、日报、当前流程与实时日志集中在一个窗口。</sub></p>
+<p align="center"><sub>v2026.7.29.117 桌面工作台：项目、数据模式、小时报、日报、当前流程与实时日志集中在一个窗口。</sub></p>
 
 <table>
   <tr>
@@ -104,7 +104,7 @@ flowchart LR
 新电脑只分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.29.116.exe
+Hourlyreport_automation_setup_v2026.7.29.117.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动会检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -158,16 +158,17 @@ Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总�
 
 | 项目 | 内容 |
 |:--|:--|
-| 当前版本 | `2026.7.29.116` |
-| Release Tag | `v2026.7.29.116` |
-| 在线更新 | `Hourlyreport_automation_v2026.7.29.116.zip` |
-| 完整安装 | `Hourlyreport_automation_setup_v2026.7.29.116.exe` |
+| 当前版本 | `2026.7.29.117` |
+| Release Tag | `v2026.7.29.117` |
+| 在线更新 | `Hourlyreport_automation_v2026.7.29.117.zip` |
+| 完整安装 | `Hourlyreport_automation_setup_v2026.7.29.117.exe` |
 | 更新仓库 | [`kaiteJiang/Hourlyreport-Automation`](https://github.com/kaiteJiang/Hourlyreport-Automation) |
 
 版本号遵循 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/`、`browser_profile/` 和 `runtime/`。
 
 | 版本 | 重点 |
 |:--|:--|
+| `v117` | 修复 Electron 客户端持续写库被误判为数据库超时；在快商通设置中直接提供程序目录、数据目录与重新扫描入口 |
 | `v116` | 快商通本地 API 支持 Electron 与旧 Java/JCEF 两类客户端；加强本机路径设置、退避重试与在线更新包数据隔离 |
 | `v115` | 快商通本地 API 启动与日报读取性能优化；README 升级为面向用户的产品首页 |
 | `v114` | 精简 GUI 打包依赖与发布目录；清理旧入口和开发边角料 |
