@@ -14,7 +14,9 @@ DESKTOP_EXE = "hourlyreport_automation.exe"
 DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth", ".db", ".cdb", ".pdb"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth"}
+DATABASE_SUFFIXES = {".db", ".cdb", ".pdb", ".sqlite", ".sqlite3"}
+DATABASE_SIDECAR_SUFFIXES = {"-wal", "-shm", "-journal"}
 EXCLUDE_FILES = {
     "config.json",
     "credentials.local.json",
@@ -42,6 +44,23 @@ LEGACY_ROOT_FILES = {
 }
 
 ONLINE_VERSION_PATTERN = re.compile(r"^v?(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$")
+
+
+def _is_database_payload(path: Path) -> bool:
+    """Return whether a basename is a SQLite database or its journal sidecar."""
+    name = path.name.casefold()
+    if any(name.endswith(suffix) for suffix in DATABASE_SUFFIXES):
+        return True
+    if any(
+        name.endswith(database_suffix + sidecar_suffix)
+        for database_suffix in DATABASE_SUFFIXES
+        for sidecar_suffix in DATABASE_SIDECAR_SUFFIXES
+    ):
+        return True
+    return any(
+        name.endswith(sidecar_suffix)
+        for sidecar_suffix in DATABASE_SIDECAR_SUFFIXES
+    )
 
 
 def validate_online_version(version: str) -> str:
@@ -135,7 +154,9 @@ def should_include_file(
         return False
     if path.name in EXCLUDE_FILES:
         return False
-    if path.suffix.lower() in EXCLUDE_SUFFIXES:
+    if path.suffix.casefold() in EXCLUDE_SUFFIXES:
+        return False
+    if _is_database_payload(path):
         return False
     # 所有程序发布包都排除真实凭据；授权配置通过独立配置包传递。
     if len(parts) >= 2 and parts[0] == "secrets":

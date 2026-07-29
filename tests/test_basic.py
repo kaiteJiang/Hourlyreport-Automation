@@ -9429,6 +9429,89 @@ def test_online_update_uses_only_staged_desktop_executable(tmp_path):
         assert archive.read("hourlyreport_automation.exe") == b"fresh-staged-exe"
 
 
+@pytest.mark.parametrize(
+    "release_options",
+    [
+        {"online_update": True},
+        {"first_install": True},
+    ],
+    ids=["online-update", "first-install"],
+)
+def test_program_release_excludes_sqlite_database_sidecars_in_nested_mixed_case_paths(
+    tmp_path,
+    release_options,
+):
+    """Database payloads must never bypass the shared release file filter."""
+    import zipfile
+
+    from tools.build_desktop_exe import write_build_manifest
+    from tools.build_release import build_release
+
+    version = "2026.7.29.116"
+    root = tmp_path / "source"
+    artifact_dir = root / "build" / f"release_{version}_staging"
+    artifact_dir.mkdir(parents=True)
+    executable = artifact_dir / "hourlyreport_automation.exe"
+    executable.write_bytes(b"exe")
+    (root / "gui").mkdir(parents=True)
+    (root / "gui" / "version.py").write_text(
+        f'CURRENT_VERSION = "{version}"\n',
+        encoding="utf-8",
+    )
+    (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (root / "configs" / "projects").mkdir(parents=True)
+    (root / "configs" / "app_config.json").write_text("{}\n", encoding="utf-8")
+    (root / "configs" / "projects" / "demo.json").write_text(
+        '{"project_id":"demo"}\n',
+        encoding="utf-8",
+    )
+    (root / "install_env.bat").write_text("@echo off\r\n", encoding="ascii")
+    (root / "requirements-runtime.txt").write_text("openpyxl\n", encoding="utf-8")
+    nested = root / "nested" / "session_data"
+    nested.mkdir(parents=True)
+    excluded_names = (
+        "conversation.Db",
+        "conversation.CdB",
+        "conversation.pDb",
+        "conversation.sQLite",
+        "conversation.SqlItE3",
+        "conversation.Db-WaL",
+        "conversation.CdB-sHm",
+        "conversation.pDb-JOURNAL",
+        "conversation.sQLite-wAl",
+        "conversation.sQLite3-ShM",
+        "conversation.sqlite3-journal",
+        "conversation-WaL",
+        "conversation-sHm",
+        "conversation-JOURNAL",
+    )
+    for name in excluded_names:
+        (nested / name).write_bytes(b"")
+    (nested / "sqlite_notes.py").write_text("# ordinary source\n", encoding="utf-8")
+    (nested / "journal-guide.md").write_text("ordinary documentation\n", encoding="utf-8")
+    write_build_manifest(root, executable, version)
+
+    release = build_release(
+        root,
+        version=version,
+        artifact_dir=artifact_dir,
+        output_dir=tmp_path / "output",
+        **release_options,
+    )
+
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+
+    assert "hourlyreport_automation.exe" in names
+    assert "nested/session_data/sqlite_notes.py" in names
+    assert "nested/session_data/journal-guide.md" in names
+    assert all("\\" not in name for name in names)
+    assert not any(name.rsplit("/", 1)[-1] in excluded_names for name in names)
+    if release_options.get("first_install"):
+        assert "configs/app_config.json" in names
+        assert "configs/projects/demo.json" in names
+
+
 def test_online_update_excludes_nested_development_worktrees(tmp_path):
     import zipfile
 
