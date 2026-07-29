@@ -72,6 +72,7 @@ def test_source_fetches_loopback_report_and_writes_existing_shape(
         "kunming_niu"
     ]
     assert calls[0][1]["Authorization"] == f"Bearer {token}"
+    assert calls[0][2] == 15
     assert result["parse_report"]["passed"] is True
     output = tmp_path / "reports" / "kst_dialog_data.json"
     assert json.loads(output.read_text(encoding="utf-8"))["source"] == "kst_local_api"
@@ -272,6 +273,82 @@ def test_daily_source_fetches_project_report_and_writes_daily_contract(
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["source"] == "kst_local_api"
     assert saved["project_id"] == "kunming_niu"
+    assert calls[0][2] == 15
+
+
+@pytest.mark.parametrize(
+    ("configured_timeout", "expected_timeout"),
+    [(99, 15), (0, 1), (-10, 1)],
+)
+def test_hourly_source_clamps_configured_timeout(
+    tmp_path,
+    configured_timeout,
+    expected_timeout,
+):
+    config = _config()
+    config["kst"]["local_api_timeout_seconds"] = configured_timeout
+    recorded_timeouts = []
+
+    fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        target_date="2026-07-27",
+        transport=lambda _url, _headers, timeout: (
+            recorded_timeouts.append(timeout)
+            or {
+                "project_id": "kunming_niu",
+                "date": "2026-07-27",
+                "period": "15点",
+                "source": "kst_local_api",
+                "accounts": {
+                    account: {
+                        "总对话": 0,
+                        "有效对话": 0,
+                        "一般有效": 0,
+                        "有效转潜": 0,
+                        "总转潜": 0,
+                    }
+                    for account in config["accounts"]
+                },
+                "errors": [],
+            }
+        ),
+    )
+
+    assert recorded_timeouts == [expected_timeout]
+
+
+@pytest.mark.parametrize(
+    ("configured_timeout", "expected_timeout"),
+    [(99, 15), (0, 1), (-10, 1)],
+)
+def test_daily_source_clamps_configured_timeout(
+    tmp_path,
+    configured_timeout,
+    expected_timeout,
+):
+    config = _config()
+    config["kst"]["local_api_timeout_seconds"] = configured_timeout
+    recorded_timeouts = []
+
+    fetch_kst_local_daily_report(
+        config,
+        tmp_path,
+        target_date="2026-07-26",
+        transport=lambda _url, _headers, timeout: (
+            recorded_timeouts.append(timeout)
+            or {
+                "project_id": "kunming_niu",
+                "date": "2026-07-26",
+                "source": "kst_local_api",
+                "accounts": _daily_accounts(),
+                "errors": [],
+            }
+        ),
+    )
+
+    assert recorded_timeouts == [expected_timeout]
 
 
 def test_daily_response_for_another_project_is_zeroed_when_opted_in(

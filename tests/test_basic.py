@@ -10836,8 +10836,16 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert "Excel 路径配置" in inline_labels
     assert "快商通模式" in inline_labels
     assert "Excel 自动打开" in inline_labels
-    assert [action.text() for action in window.kst_mode_menu.actions()] == [
-        "API 自动获取", "人工导出对话"
+    assert [
+        "---" if action.isSeparator() else action.text()
+        for action in window.kst_mode_menu.actions()
+    ] == [
+        "API 自动获取",
+        "人工导出对话",
+        "---",
+        "选择快商通程序目录",
+        "选择快商通数据目录",
+        "重新扫描快商通",
     ]
     assert [action.text() for action in window.excel_auto_open_menu.actions()] == ["启动", "停止"]
     assert [action.text() for action in window.pet_menu.actions() if not action.isSeparator()] == [

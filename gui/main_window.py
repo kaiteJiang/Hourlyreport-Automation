@@ -102,6 +102,10 @@ from modules.project_config import (
     set_data_source_preference as save_data_source_preference,
 )
 from modules.excel_path_config import EXCEL_ROOT_NAME, configure_excel_paths
+from modules.kst_local.machine_settings import (
+    load_kst_machine_settings,
+    save_kst_machine_settings,
+)
 from modules.secrets_package import (
     SecretsPackageError,
     export_secrets_package,
@@ -1647,7 +1651,9 @@ class MainWindow(QMainWindow):
         self._multi_task_active = False
         self._saved_multi_project_ids: list[str] = []
         self._quit_after_task = False
-        self._kst_api_stopped = False
+        self._kst_api_requested = self.kst_data_source == "local_api"
+        self._kst_api_manager_active = False
+        self._application_exiting = False
         self._pet_scale_save_timer = QTimer(self)
         self._pet_scale_save_timer.setSingleShot(True)
         self._pet_scale_save_timer.setInterval(250)
@@ -1705,7 +1711,8 @@ class MainWindow(QMainWindow):
         self.desktop_pet.set_enabled(self.pet_mode == PET_CLAWD)
         self.refresh_projects()
         self.set_current_flow_idle()
-        QTimer.singleShot(0, self.start_kst_api)
+        if self._kst_api_requested:
+            QTimer.singleShot(0, self._apply_kst_api_request)
         QTimer.singleShot(0, self.run_startup_check)
         QTimer.singleShot(450, self.show_pet_greeting)
 
@@ -1905,6 +1912,29 @@ class MainWindow(QMainWindow):
         )
         self.kst_mode_menu.addAction(self.kst_api_action)
         self.kst_mode_menu.addAction(self.kst_export_action)
+        self.kst_mode_menu.addSeparator()
+        self.kst_installation_root_action = QAction(
+            "选择快商通程序目录",
+            self.kst_mode_menu,
+        )
+        self.kst_data_root_action = QAction(
+            "选择快商通数据目录",
+            self.kst_mode_menu,
+        )
+        self.kst_rescan_action = QAction(
+            "重新扫描快商通",
+            self.kst_mode_menu,
+        )
+        self.kst_installation_root_action.triggered.connect(
+            self.choose_kst_installation_root
+        )
+        self.kst_data_root_action.triggered.connect(
+            self.choose_kst_data_root
+        )
+        self.kst_rescan_action.triggered.connect(self.rescan_kst_api)
+        self.kst_mode_menu.addAction(self.kst_installation_root_action)
+        self.kst_mode_menu.addAction(self.kst_data_root_action)
+        self.kst_mode_menu.addAction(self.kst_rescan_action)
         self.system_config_menu.addMenu(self.kst_mode_menu)
         self.system_config_menu.addSeparator()
         self.excel_auto_open_menu = QMenu("Excel 自动打开", self.system_config_menu)
@@ -3324,11 +3354,16 @@ class MainWindow(QMainWindow):
         self._sync_kst_mode_menu()
         label = "API 自动获取" if mode == "local_api" else "人工导出对话"
         self.append_log(f"[设置] 快商通模式已切换为{label}")
+        if self.kst_data_source == "local_api":
+            self.start_kst_api()
+        else:
+            self.stop_kst_api()
 
     def _sync_kst_mode_menu(self) -> None:
         is_api = self.kst_data_source == "local_api"
         self.kst_api_action.setChecked(is_api)
         self.kst_export_action.setChecked(not is_api)
+        self.kst_rescan_action.setEnabled(is_api)
         if hasattr(self, "inline_config_menu"):
             self.inline_config_menu.sync(
                 getattr(self, "pet_mode", PET_CLAWD),
@@ -3338,15 +3373,91 @@ class MainWindow(QMainWindow):
             )
 
     def start_kst_api(self) -> None:
-        if self._kst_api_stopped:
+        if (
+            self._application_exiting
+            or self.kst_data_source != "local_api"
+        ):
             return
+        self._kst_api_requested = True
+        self._apply_kst_api_request()
+
+    def _apply_kst_api_request(self) -> None:
+        if (
+            not self._kst_api_requested
+            or self._kst_api_manager_active
+            or self._application_exiting
+        ):
+            return
+        self._kst_api_manager_active = True
         self.kst_api_manager.start()
 
     def stop_kst_api(self) -> None:
-        if self._kst_api_stopped:
+        if not self._kst_api_requested and not self._kst_api_manager_active:
             return
-        self._kst_api_stopped = True
+        self._kst_api_requested = False
+        self._kst_api_manager_active = False
         self.kst_api_manager.stop()
+
+    def choose_kst_installation_root(self) -> None:
+        try:
+            settings = load_kst_machine_settings(self.root)
+        except Exception:
+            self.append_log("[失败] 快商通本机路径设置无法读取")
+            return
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择快商通程序目录",
+            str(settings.installation_root or self.root),
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return
+        try:
+            save_kst_machine_settings(
+                self.root,
+                installation_root=Path(selected),
+                data_root=settings.data_root,
+            )
+        except Exception:
+            self.append_log("[失败] 快商通程序目录未保存")
+            return
+        self.append_log("[设置] 快商通程序目录已更新")
+        self.rescan_kst_api()
+
+    def choose_kst_data_root(self) -> None:
+        try:
+            settings = load_kst_machine_settings(self.root)
+        except Exception:
+            self.append_log("[失败] 快商通本机路径设置无法读取")
+            return
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择快商通数据目录",
+            str(settings.data_root or self.root),
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return
+        try:
+            save_kst_machine_settings(
+                self.root,
+                installation_root=settings.installation_root,
+                data_root=Path(selected),
+            )
+        except Exception:
+            self.append_log("[失败] 快商通数据目录未保存")
+            return
+        self.append_log("[设置] 快商通数据目录已更新")
+        self.rescan_kst_api()
+
+    def rescan_kst_api(self) -> None:
+        if (
+            self.kst_data_source != "local_api"
+            or self._application_exiting
+        ):
+            return
+        self.start_kst_api()
+        self.kst_api_manager.rescan()
 
     def on_kst_api_status_changed(self, ready: bool, detail: str) -> None:
         self.kst_status_control.set_api_ready(ready, detail)
@@ -3433,6 +3544,7 @@ class MainWindow(QMainWindow):
         if self._pet_scale_save_timer.isActive():
             self._pet_scale_save_timer.stop()
             self._persist_desktop_pet_scale()
+        self._application_exiting = True
         self._quitting = True
         self.stop_kst_api()
         self.tray_icon.hide()

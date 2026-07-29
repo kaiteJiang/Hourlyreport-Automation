@@ -58,6 +58,17 @@ def _validate_loopback_url(value: str) -> str:
     return "http://127.0.0.1:18766"
 
 
+def _local_api_timeout(kst_config: dict[str, Any]) -> int:
+    value = kst_config.get("local_api_timeout_seconds")
+    if value in (None, ""):
+        return 15
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        return 15
+    return max(1, min(15, timeout))
+
+
 def write_unavailable_zero_result(
     config: dict[str, Any],
     root: Path,
@@ -141,7 +152,7 @@ def fetch_kst_local_report(
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    timeout = int(kst_config.get("local_api_timeout_seconds") or 60)
+    timeout = _local_api_timeout(kst_config)
     try:
         try:
             payload = transport(
@@ -348,7 +359,7 @@ def fetch_kst_local_daily_report(
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    timeout = int(kst_config.get("local_api_timeout_seconds") or 60)
+    timeout = _local_api_timeout(kst_config)
     try:
         try:
             payload = transport(

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,23 @@ class FakeKstApiManager(QObject):
 
     def stop(self):
         self.stop_calls += 1
+
+
+def _set_kst_data_source(root: Path, mode: str) -> None:
+    config_dir = root / "configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "app_config.json").write_text(
+        json.dumps(
+            {
+                "default_project_id": "demo",
+                "projects_dir": "configs/projects",
+                "secrets_file": "secrets/secrets.json",
+                "kst_data_source": mode,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _root():
@@ -62,4 +80,45 @@ def test_window_stop_is_idempotent(qapp):
     window.stop_kst_api()
 
     assert fake.stop_calls == 1
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("mode", "starts"),
+    [("local_api", 1), ("export", 0)],
+)
+def test_window_starts_manager_only_in_api_mode(
+    qapp,
+    tmp_path,
+    mode,
+    starts,
+):
+    _set_kst_data_source(tmp_path, mode)
+    fake = FakeKstApiManager()
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: fake,
+    )
+
+    QApplication.processEvents()
+
+    assert fake.start_calls == starts
+    window.stop_kst_api()
+    window.close()
+
+
+def test_mode_switch_stops_and_restarts_manager(qapp, tmp_path):
+    _set_kst_data_source(tmp_path, "local_api")
+    fake = FakeKstApiManager()
+    window = MainWindow(
+        tmp_path,
+        kst_api_manager_factory=lambda *_: fake,
+    )
+    QApplication.processEvents()
+
+    window.set_global_kst_data_source("export")
+    window.set_global_kst_data_source("local_api")
+
+    assert (fake.stop_calls, fake.start_calls) == (1, 2)
+    window.stop_kst_api()
     window.close()
