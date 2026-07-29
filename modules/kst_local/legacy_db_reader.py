@@ -195,6 +195,11 @@ def validate_legacy_read_capability(
             cancel_event,
             deadline,
         )
+    _read_legacy_promotion_ids_with_deadline(
+        installation,
+        cancel_event,
+        deadline,
+    )
     _check_interrupted(cancel_event, deadline)
 
 
@@ -321,13 +326,11 @@ def _read_history_rows(
     return rows_by_rec_id
 
 
-def read_legacy_promotion_ids(
+def _read_legacy_promotion_ids_with_deadline(
     installation: LegacyKstInstallation,
-    *,
-    cancel_event: Any = None,
-    deadline_seconds: float = 5.0,
+    cancel_event: Any,
+    deadline: float,
 ) -> set[str]:
-    deadline = time.monotonic() + deadline_seconds
     authorized = _read_all_authorized_rec_ids(
         installation,
         cancel_event,
@@ -354,6 +357,20 @@ def read_legacy_promotion_ids(
         _check_interrupted(cancel_event, deadline)
     _check_interrupted(cancel_event, deadline)
     return promotion_ids
+
+
+def read_legacy_promotion_ids(
+    installation: LegacyKstInstallation,
+    *,
+    cancel_event: Any = None,
+    deadline_seconds: float = 5.0,
+) -> set[str]:
+    deadline = time.monotonic() + deadline_seconds
+    return _read_legacy_promotion_ids_with_deadline(
+        installation,
+        cancel_event,
+        deadline,
+    )
 
 
 def read_legacy_conversations(

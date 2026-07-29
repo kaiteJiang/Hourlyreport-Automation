@@ -14,6 +14,7 @@ from modules.kst_local.legacy_db_reader import (
     normalize_legacy_tags,
     read_legacy_conversations,
     read_legacy_promotion_ids,
+    validate_legacy_read_capability,
 )
 from modules.kst_local.models import LegacyKstInstallation
 
@@ -382,6 +383,76 @@ def test_promotion_ids_use_only_live_authorized_records(legacy_installation):
     before = {path: path.read_bytes() for path in paths}
     assert read_legacy_promotion_ids(legacy_installation) == {"10001"}
     assert {path: path.read_bytes() for path in paths} == before
+
+
+def test_readiness_capability_uses_one_absolute_deadline(
+    legacy_installation,
+    monkeypatch,
+):
+    deadlines = []
+    clock_values = iter((10.0, 20.0))
+    monkeypatch.setattr(
+        legacy_db_reader.time,
+        "monotonic",
+        lambda: next(clock_values),
+    )
+    monkeypatch.setattr(
+        legacy_db_reader,
+        "_check_interrupted",
+        lambda _cancel_event, _deadline: None,
+    )
+    monkeypatch.setattr(
+        legacy_db_reader,
+        "_validate_database_capability",
+        lambda _path, _query, _cancel_event, deadline: deadlines.append(
+            ("schema", deadline)
+        ),
+    )
+
+    def read_authorized(
+        _installation,
+        _cancel_event,
+        deadline,
+    ):
+        deadlines.append(("authorized", deadline))
+        return {"shared-deadline-rec-id"}
+
+    def read_history(
+        _installation,
+        _rec_ids,
+        _cancel_event,
+        deadline,
+    ):
+        deadlines.append(("history", deadline))
+        return {
+            "shared-deadline-rec-id": (
+                "shared-deadline-rec-id",
+                None,
+                None,
+                None,
+                "推广 ID：10001",
+            )
+        }
+
+    monkeypatch.setattr(
+        legacy_db_reader,
+        "_read_all_authorized_rec_ids",
+        read_authorized,
+    )
+    monkeypatch.setattr(
+        legacy_db_reader,
+        "_read_history_rows",
+        read_history,
+    )
+
+    validate_legacy_read_capability(legacy_installation)
+
+    assert deadlines == [
+        ("schema", 15.0),
+        ("schema", 15.0),
+        ("authorized", 15.0),
+        ("history", 15.0),
+    ]
 
 
 def test_live_records_outside_target_date_are_not_counted(legacy_installation):

@@ -62,6 +62,45 @@ def _create_message_database(
         connection.commit()
 
 
+def _insert_message(path, rec_id) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            "INSERT INTO DIALOGRECORD_VISITOR "
+            "(recId, addTime) VALUES (?, ?)",
+            (rec_id, "2026-07-29 09:10:01"),
+        )
+        connection.commit()
+
+
+def _insert_history(path, rec_id) -> None:
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO OC_HDVISITORINFO (
+                recId, curEnterTime, diaStartTime, visitorSendNum,
+                visitorCustomField, keyword, bidWord, talkGrade,
+                dialogClassification, classifyTag, cusTypeTag, aiTags
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rec_id,
+                "2026-07-29 09:10:00",
+                "",
+                1,
+                "推广 ID：10001",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ),
+        )
+        connection.commit()
+
+
 @pytest.fixture
 def electron_installation(tmp_path):
     root = tmp_path / "electron"
@@ -184,6 +223,38 @@ def test_legacy_readiness_accepts_valid_empty_databases(
         legacy_installation,
         "2026-07-29",
     ) is True
+
+
+@pytest.mark.parametrize(
+    "incomplete_case",
+    [
+        "missing_history_row",
+        "duplicate_history_row",
+    ],
+)
+def test_legacy_readiness_and_health_reject_incomplete_live_data(
+    legacy_installation,
+    incomplete_case,
+):
+    rec_id = "incomplete-live-rec-id"
+    _insert_message(
+        legacy_installation.message_database_paths[0],
+        rec_id,
+    )
+    if incomplete_case == "duplicate_history_row":
+        _insert_history(legacy_installation.history_db, rec_id)
+        _insert_history(legacy_installation.history_db, rec_id)
+
+    assert installation_ready(
+        legacy_installation,
+        "2026-07-29",
+    ) is False
+    health = LegacyKstRuntime(
+        installation=legacy_installation,
+        service=object(),
+    ).health()
+    assert health["status"] == "not_ready"
+    assert health["read_only_database_available"] is False
 
 
 @pytest.mark.parametrize(
