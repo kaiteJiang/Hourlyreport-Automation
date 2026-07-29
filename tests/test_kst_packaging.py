@@ -123,6 +123,8 @@ def test_gui_kst_api_import_graph_does_not_load_tabular_stack():
 
 
 def test_desktop_spec_packages_kst_database_bridge():
+    from gui.version import CURRENT_VERSION
+
     root = Path(__file__).resolve().parents[1]
     spec_source = (
         root / "tools" / "hourlyreport_automation.spec"
@@ -130,7 +132,9 @@ def test_desktop_spec_packages_kst_database_bridge():
 
     assert "read_visitor_db.js" in spec_source
     assert "read_promotion_ids.js" in spec_source
+    assert "modules/kst_local" in spec_source.replace("\\", "/")
     assert "modules/kst_local/resources" in spec_source.replace("\\", "/")
+    assert CURRENT_VERSION == "2026.7.29.116"
 
 
 def test_desktop_fingerprint_changes_when_kst_bridge_changes(tmp_path):

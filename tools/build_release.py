@@ -121,6 +121,8 @@ def should_include_file(
         "configs", "secrets", "reports", "logs", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"
     }:
         return False
+    if online_update and path.suffix.lower() in {".db", ".cdb", ".pdb"}:
+        return False
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
     if parts and parts[0] == "dist":

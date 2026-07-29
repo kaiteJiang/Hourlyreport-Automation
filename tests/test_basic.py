@@ -9328,6 +9328,15 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
         encoding="utf-8",
     )
     (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (root / "runtime").mkdir()
+    (root / "runtime" / "kst_local_api_token").write_text(
+        "test-token",
+        encoding="utf-8",
+    )
+    # 仅用临时占位文件验证扩展名过滤；不创建或提交真实数据库。
+    (root / "legacy.db").write_text("not-a-database", encoding="utf-8")
+    (root / "legacy.cdb").write_text("not-a-database", encoding="utf-8")
+    (root / "legacy.pdb").write_text("not-a-database", encoding="utf-8")
     artifact_dir = (
         root / "build" / "release_2026.7.27.113_staging"
     )
@@ -9358,6 +9367,8 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     assert not any(name.startswith("secrets/") for name in names)
     assert not any(name.startswith("logs/") for name in names)
     assert not any(name.startswith("reports/") for name in names)
+    assert not any(name.startswith("runtime/") for name in names)
+    assert not any(name.endswith((".db", ".cdb", ".pdb")) for name in names)
     assert not any(name.startswith("backups/") for name in names)
     assert not any(name.startswith("browser_profile/") for name in names)
     assert not any(name.endswith(".lock") for name in names)
@@ -11883,7 +11894,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.28.115"
+    assert CURRENT_VERSION == "2026.7.29.116"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
@@ -11891,13 +11902,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.28.116",
+        "tag_name": "v2026.7.29.117",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.28.116.zip",
+                "name": "Hourlyreport_automation_v2026.7.29.117.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11908,10 +11919,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.28.116"
+    assert update.version == "2026.7.29.117"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.28.116") is None
+    assert select_release_update(payload, "2026.7.29.117") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -12004,12 +12015,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.28.116",
+        "tag_name": "v2026.7.29.117",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.28.116.zip",
+                "name": "Hourlyreport_automation_v2026.7.29.117.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -12037,7 +12048,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.28.116"]
+    assert [item.version for item in available] == ["2026.7.29.117"]
     assert ready == []
 
 

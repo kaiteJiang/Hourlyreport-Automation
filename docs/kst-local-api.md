@@ -23,8 +23,8 @@ http://127.0.0.1:18766
 
 一台电脑可以同时登录多个快商通账号。程序会：
 
-1. 自动查找常见快商通安装目录，也支持 `KST_INSTALLATION_ROOT` 指定根目录；
-2. 确认快商通客户端进程正在运行，并枚举 `%LOCALAPPDATA%\OnlineWebCSNew` 下近期仍在写日志且具有 `VISITOR*.db` 的登录身份；
+1. 自动识别 Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe`（安装目录含 `resources/app/package.json`）与旧 Java/JCEF `OnlineCS.exe`（安装目录含 `config/DBCOMPANY.dll`）；也兼容 `KST_INSTALLATION_ROOT` 指定程序目录；
+2. 确认受支持的快商通客户端进程正在运行。Electron 枚举 `%LOCALAPPDATA%\OnlineWebCSNew` 下近期仍在写日志且具有 `VISITOR*.db` 的登录身份；旧客户端读取 Windows“文档”目录下 `KuaiShangDataNew` 的身份数据；
 3. 以只读方式从每个身份的当前库和轮换库提取历史推广 ID；
 4. 根据九个正式项目配置中的推广 ID 建立全局反向索引；
 5. 仅在“一个身份只命中一个项目、一个项目只命中一个身份”时建立绑定。
@@ -40,22 +40,23 @@ http://127.0.0.1:18766
 
 活跃日志窗口默认 300 秒，可由管理员通过 `KST_ACTIVE_LOG_MAX_AGE_SECONDS` 调整；GUI 运行期间会周期刷新注册表，因此新增登录、退出或切换账号不需要重启小时报程序。
 
+自动发现失败或安装位置变更时，在 `系统 > 快商通模式` 选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”。选择器只接受目录；保存后异步重扫，不阻塞界面。旧客户端的数据根目录为 `KuaiShangDataNew`，真实业务数据在其 `db` 下；不得复制、迁移或手动选择其中的数据库文件。
+
 ## 数据边界
 
-进入统计的会话必须在快商通日志中具有服务器自动推送或启动自动同步凭证。仅由人工历史查询下载到本地、但没有自动来源凭证的数据库记录不会进入统计。
+进入统计的会话必须具有自动来源凭证。Electron 会话须在快商通日志中具有服务器自动推送或启动自动同步凭证；旧 Java/JCEF 会话须先出现在目标日期的 `*-onlie/*_CS.pdb` 即时分片。仅由人工历史查询下载到本地、没有这些凭证的记录不会进入统计。
 
-数据库连接强制使用 SQLCipher `readonly` 和 `fileMustExist`：
+两类客户端均为只读：
 
-- 推广 ID 桥只读取 `visitorCustomField` 与 `info`；
-- 不执行 INSERT、UPDATE 或 DELETE；
-- 不返回聊天正文、姓名、手机、微信或认证令牌；
-- 会话详情和标签通过对应登录身份的只读服务端接口查询。
+- Electron 的 SQLCipher 桥使用 `readonly` 和 `fileMustExist`，推广 ID 桥只读取 `visitorCustomField` 与 `info`；会话详情和标签通过对应登录身份的只读服务端接口查询。
+- 旧 Java/JCEF 的 `.cdb/.pdb` 为标准 SQLite，以 `mode=ro` 打开；仅从即时分片授权的会话补充历史库字段、推广 ID 与标签。
+- 不执行 INSERT、UPDATE 或 DELETE，不返回聊天正文、姓名、手机、微信或认证令牌。
 
 ## 性能与认证安全
 
-运行时可以从同一登录身份的历史日志恢复服务端接口 URL，以避免因当天日志没有再次记录 URL 而等待；但公共查询参数、请求头和 Token 只允许从当天日志取得，不得跨日复用。当天认证材料缺失或不完整时，该身份不会进入可用注册表，KST 状态保持灰色。
+Electron 运行时可以从同一登录身份的历史日志恢复服务端接口 URL，以避免因当天日志没有再次记录 URL 而等待；但公共查询参数、请求头和 Token 只允许从当天日志取得，不得跨日复用。当天认证材料缺失或不完整时，该身份不会进入可用注册表，KST 状态保持灰色。
 
-日报采集按不同会话最多 4 路并发。单个会话内部仍严格依次调用 `visitor_info`、`visitor_card`，不得并发、跳过或复用其他会话的结果。任一会话查询失败或返回不完整时，丢弃该项目的全部快商通临时结果，整项目快商通指标按 0 继续，不输出部分统计。
+Electron 日报采集按不同会话最多 4 路并发。单个会话内部仍严格依次调用 `visitor_info`、`visitor_card`，不得并发、跳过或复用其他会话的结果。两类客户端任一会话查询失败或返回不完整时，均丢弃该项目的全部快商通临时结果，整项目快商通指标按 0 继续，不输出部分统计。
 
 ## 小时报调用
 
@@ -65,13 +66,15 @@ GET /v1/kst/hourly?project_id=<项目ID>&date=YYYY-MM-DD&period=15点
 
 `project_id` 必填。响应的项目 ID 必须与请求项目完全一致，否则小时报把该响应视为不可用，禁止合并。
 
-API 模式下，某项目出现未绑定、歧义、服务不可用或响应不完整时：
+API 模式下，某项目出现未绑定、歧义、服务不可用、客户端未运行、程序目录或数据目录无效、数据库结构不兼容、端口冲突或响应不完整时：
 
 - 该项目快商通五项指标按 0；
 - 百度数据继续；
 - 不检查、也不隐式读取旧人工导出文件。
 
 人工恢复只能显式选择 `系统 > 快商通模式 > 人工导出对话`。人工模式继续使用原有最近导出文件流程，并且不会调用本地 API。
+
+本地 API 的脱敏状态类别包括：认证配置无效、客户端目录无效、数据目录无效、客户端未运行、数据库结构不兼容、身份映射未就绪、端口被占用与启动失败。持续未就绪时按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 上限退避；相同类别只在首次、类别变化和每 5 分钟状态提醒时写实时日志，成功后重置。切到“人工导出对话”会停止本地 API 的启动与重试。
 
 客户端请求地址固定为 `http://127.0.0.1:18766`。令牌优先读取 `KST_LOCAL_API_TOKEN`；未设置时自动生成到被 Git 和发布包排除的 `runtime/kst_local_api_token`，供同一安装目录下的 GUI 与 HERMES/CLI 安全复用。健康检查与数据接口都必须通过令牌认证，项目配置不能把令牌转发给其他本机端口。
 
@@ -98,13 +101,10 @@ Invoke-RestMethod http://127.0.0.1:18766/health -Headers @{Authorization = "Bear
 
 发现器会检查：
 
-- `resources/app/package.json`
-- `OnlineWebCS.exe` 或 `OnlineWebCSNew.exe`
-- `better-sqlite3-multiple-ciphers`
-- `%LOCALAPPDATA%\OnlineWebCSNew\log\<identity>`
-- `%LOCALAPPDATA%\OnlineWebCSNew\db\<identity>\VISITOR*.db`
+- Electron：`OnlineWebCS.exe` 或 `OnlineWebCSNew.exe`、`resources/app/package.json`、`better-sqlite3-multiple-ciphers`、`%LOCALAPPDATA%\OnlineWebCSNew\log\<identity>`、`%LOCALAPPDATA%\OnlineWebCSNew\db\<identity>\VISITOR*.db`
+- 旧 Java/JCEF：`OnlineCS.exe`、`config/DBCOMPANY.dll`、Windows“文档”下 `KuaiShangDataNew\db` 的 `<公司身份>_HIS.cdb` 与 `*-onlie\*_CS.pdb`
 
-已实机验证快商通 `9.86.21`。其他版本若文件结构或表结构不同，会安全停止该身份绑定并让对应项目按 0 继续，不会写入或迁移快商通文件。
+Electron `9.86.21` 已完成既有只读验证；旧 Java/JCEF 客户端以合成结构测试覆盖发现与读取边界。其他版本若文件结构或表结构不同，会安全停止该身份绑定并让对应项目按 0 继续，不会写入或迁移快商通文件；真实数据口径仍应由业务同事按本机环境验收。
 
 ## 昆明牛验收基准
 

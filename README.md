@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.28.115-3B82F6?style=for-the-badge" alt="Version 2026.7.28.115">
+  <img src="https://img.shields.io/badge/version-2026.7.29.116-3B82F6?style=for-the-badge" alt="Version 2026.7.29.116">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Local-First-16A34A?style=for-the-badge" alt="Local First">
   <img src="https://img.shields.io/badge/Excel-Safe-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -38,7 +38,7 @@
   <img src="docs/images/desktop-console.png" width="900" alt="蚁之力竞价数据自动化桌面控制台">
 </p>
 
-<p align="center"><sub>v2026.7.28.115 桌面工作台：项目、数据模式、小时报、日报、当前流程与实时日志集中在一个窗口。</sub></p>
+<p align="center"><sub>v2026.7.29.116 桌面工作台：项目、数据模式、小时报、日报、当前流程与实时日志集中在一个窗口。</sub></p>
 
 <table>
   <tr>
@@ -89,7 +89,7 @@ flowchart LR
 | 模块 | 能力 | 关键边界 |
 |:--|:--|:--|
 | 百度数据 | API 优先，单项目必要时由 Chrome CDP 兜底 | Token 最多刷新 1 次、网络额外重试 2 次、完整性额外读取 1 次，总预算 20 秒 |
-| 快商通数据 | 默认使用本地只读 API，可显式切换人工导出 | 只绑定 `127.0.0.1:18766`，按推广 ID 唯一路由；失败或不完整时指标按 0，不偷读旧导出 |
+| 快商通数据 | 默认使用本地只读 API，可显式切换人工导出 | 自动兼容 Electron 与旧 Java/JCEF 客户端；按推广 ID 唯一路由，失败或不完整时指标按 0，不偷读旧导出 |
 | 小时报 | 处理 11 点、15 点和 18 点报表 | 百度、快商通、合并、Excel 写入阶段可追踪 |
 | 日报 | 默认处理昨天，也可指定日期 | 等待表格快照稳定并做基础完整性校验，不使用超时前的早期残值 |
 | 多项目 | GUI 可选择 1–3 个项目 | 仅百度 API 并行准备；快商通、合并和 Excel 写入按选择顺序串行，不降级浏览器 |
@@ -104,7 +104,7 @@ flowchart LR
 新电脑只分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.28.115.exe
+Hourlyreport_automation_setup_v2026.7.29.116.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动会检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -158,16 +158,17 @@ Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总�
 
 | 项目 | 内容 |
 |:--|:--|
-| 当前版本 | `2026.7.28.115` |
-| Release Tag | `v2026.7.28.115` |
-| 在线更新 | `Hourlyreport_automation_v2026.7.28.115.zip` |
-| 完整安装 | `Hourlyreport_automation_setup_v2026.7.28.115.exe` |
+| 当前版本 | `2026.7.29.116` |
+| Release Tag | `v2026.7.29.116` |
+| 在线更新 | `Hourlyreport_automation_v2026.7.29.116.zip` |
+| 完整安装 | `Hourlyreport_automation_setup_v2026.7.29.116.exe` |
 | 更新仓库 | [`kaiteJiang/Hourlyreport-Automation`](https://github.com/kaiteJiang/Hourlyreport-Automation) |
 
 版本号遵循 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/`、`browser_profile/` 和 `runtime/`。
 
 | 版本 | 重点 |
 |:--|:--|
+| `v116` | 快商通本地 API 支持 Electron 与旧 Java/JCEF 两类客户端；加强本机路径设置、退避重试与在线更新包数据隔离 |
 | `v115` | 快商通本地 API 启动与日报读取性能优化；README 升级为面向用户的产品首页 |
 | `v114` | 精简 GUI 打包依赖与发布目录；清理旧入口和开发边角料 |
 | `v113` | 快商通本地 API 覆盖小时报与日报；完善多身份路由、缓存与安全认证 |
@@ -195,7 +196,9 @@ GUI、HERMES 和 CLI 共享应用级配置 `baidu_data_source_preference`，缺�
 <details>
 <summary><strong>2. 快商通小时报 / 日报业务口径</strong></summary>
 
-快商通本地 API 只统计具有服务器自动推送或启动自动同步凭证的会话。访问令牌保存在 Git 和发布包排除的 `runtime/`。项目未绑定、推广 ID 映射歧义、接口失败或结果不完整时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取。
+快商通本地 API 会自动识别两类受支持客户端：Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe`（数据目录通常为 `%LOCALAPPDATA%\OnlineWebCSNew`）和旧 Java/JCEF `OnlineCS.exe`（数据目录通常为“文档”下的 `KuaiShangDataNew`）。客户端必须保持运行；程序只读识别到的数据，不会启动、控制或迁移快商通客户端。
+
+如自动发现失败，可在 `系统 > 快商通模式` 中依次选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”；选择的是目录，不是单个数据库文件。API 不可用、项目未绑定、推广 ID 映射歧义、数据不完整或数据库不兼容时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。API 会按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 退避重试；同一原因只在首次、原因变化和每 5 分钟状态提醒时写实时日志。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取，并且不会启动或重试本地 API。
 
 | 小时报字段 | 快商通标签来源 | 说明 |
 |:--|:--|:--|
