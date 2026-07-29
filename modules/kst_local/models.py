@@ -28,6 +28,34 @@ class KstInstallation:
 
 
 @dataclass(frozen=True)
+class LegacyKstInstallation:
+    root: Path
+    executable: Path
+    version: str
+    identity: str
+    log_dir: Path
+    data_root: Path
+    history_db: Path
+    message_database_paths: tuple[Path, ...]
+    client_family: str = "legacy_java"
+
+    def safe_diagnostics(self) -> dict[str, Any]:
+        return {
+            "root": str(self.root),
+            "executable": str(self.executable),
+            "version": self.version,
+            "identity": self.identity,
+            "log_dir": str(self.log_dir),
+            "data_root": str(self.data_root),
+            "message_database_count": len(self.message_database_paths),
+            "client_family": self.client_family,
+        }
+
+
+KstInstallationLike = KstInstallation | LegacyKstInstallation
+
+
+@dataclass(frozen=True)
 class KstAuthContext:
     common_query: dict[str, Any] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)

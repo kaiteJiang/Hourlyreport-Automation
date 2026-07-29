@@ -7,7 +7,7 @@ import subprocess
 import time
 from typing import Callable, Iterable
 
-from modules.kst_local.models import KstInstallation
+from modules.kst_local.models import KstInstallation, KstInstallationLike
 from modules.kst_local.subprocess_utils import hidden_subprocess_kwargs
 
 
@@ -275,3 +275,43 @@ def discover_installation(
         database_paths=database_paths,
         sqlite_module_dir=sqlite_module,
     )
+
+
+def discover_all_installations(
+    root: str | Path,
+    *,
+    require_running_process: bool = True,
+) -> list[KstInstallationLike]:
+    from modules.kst_local.legacy_discovery import discover_legacy_installations
+    from modules.kst_local.machine_settings import load_kst_machine_settings
+
+    settings = load_kst_machine_settings(root)
+    configured_root = settings.installation_root
+    is_explicit_legacy_root = bool(
+        configured_root and (configured_root / "OnlineCS.exe").is_file()
+    )
+    installations: list[KstInstallationLike] = []
+    try:
+        installations.extend(
+            discover_installations(
+                explicit_root=(None if is_explicit_legacy_root else configured_root),
+                require_running_process=require_running_process,
+            )
+        )
+    except KstDiscoveryError:
+        pass
+    try:
+        installations.extend(
+            discover_legacy_installations(
+                explicit_root=(configured_root if is_explicit_legacy_root else None),
+                explicit_data_root=settings.data_root,
+                require_running_process=require_running_process,
+            )
+        )
+    except KstDiscoveryError:
+        pass
+    unique: dict[tuple[str, Path, str], KstInstallationLike] = {}
+    for installation in installations:
+        client_family = getattr(installation, "client_family", "electron")
+        unique[(client_family, installation.root, installation.identity)] = installation
+    return list(unique.values())
