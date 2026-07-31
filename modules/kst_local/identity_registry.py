@@ -351,6 +351,8 @@ class KstIdentityRegistry:
         installation: KstInstallationLike,
         *,
         fingerprint: Any,
+        target_date: str,
+        allowed_ids: set[str],
         cancel_event: Any = None,
     ) -> set[str]:
         key = (
@@ -368,6 +370,8 @@ class KstIdentityRegistry:
             _call_with_supported_keywords(
                 self._promotion_id_reader,
                 installation,
+                target_date=target_date,
+                allowed_ids=allowed_ids,
                 cancel_event=cancel_event,
             )
         )
@@ -471,6 +475,8 @@ class KstIdentityRegistry:
                 known_ids = self._promotion_ids_for(
                     installation,
                     fingerprint=fingerprint_before,
+                    target_date=target_date,
+                    allowed_ids=set(promotion_index),
                     cancel_event=cancel_event,
                 )
                 matched_projects = {

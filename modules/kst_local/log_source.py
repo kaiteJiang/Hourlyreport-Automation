@@ -19,6 +19,9 @@ SYNC_REC_ID_PATTERN = re.compile(r'\\?"recId\\?"\s*:\s*\\?"?(\d+)')
 TAG_PAIR_PATTERN = re.compile(
     r'"typeid"\s*:\s*"?(\d+)"?.*?"typename"\s*:\s*"([^"]+)"'
 )
+PROMOTION_ID_PATTERN = re.compile(
+    r'\\*"promotionId\\*"\s*:\s*\\*"?(\d{5,})'
+)
 ENDPOINT_SUFFIXES = {
     "visitor_info": "OnlineHd/visitorInfo/load",
     "dialog_records": "OnlineHd/dialogRecord/recordsByRecIdNew",
@@ -255,6 +258,39 @@ class IncrementalLogSnapshotCache:
 
 
 _DEFAULT_LOG_SNAPSHOT_CACHE = IncrementalLogSnapshotCache()
+
+
+def read_identity_promotion_ids_from_logs(
+    log_dir: str | Path,
+    target_date: str,
+    allowed_ids: set[str],
+) -> set[str]:
+    allowed = {
+        str(value).strip()
+        for value in allowed_ids
+        if str(value).strip().isdigit()
+    }
+    found: set[str] = set()
+    for path in _log_files(Path(log_dir)):
+        try:
+            lines = path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if (
+                not line.startswith(f"[{target_date} ")
+                or "visitorCustomField" not in line
+            ):
+                continue
+            found.update(
+                value
+                for value in PROMOTION_ID_PATTERN.findall(line)
+                if value in allowed
+            )
+    return found
 
 
 def _log_files(log_dir: Path) -> tuple[Path, ...]:

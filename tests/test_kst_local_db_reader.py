@@ -165,6 +165,42 @@ def test_read_identity_promotion_ids_merges_all_rotated_databases(tmp_path):
         assert all("creationflags" not in kwargs for kwargs in calls)
 
 
+def test_read_identity_promotion_ids_keeps_readable_database_results(
+    tmp_path,
+):
+    installation = _installation(tmp_path)
+    calls = 0
+
+    def runner(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"promotionIds": ["72828178"]}),
+            stderr="",
+        )
+
+    assert read_identity_promotion_ids(
+        installation,
+        runner=runner,
+    ) == {"72828178"}
+
+
+def test_read_identity_promotion_ids_fails_when_every_database_fails(
+    tmp_path,
+):
+    installation = _installation(tmp_path)
+
+    def runner(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command)
+
+    with pytest.raises(KstDatabaseError, match="只读桥执行失败"):
+        read_identity_promotion_ids(installation, runner=runner)
+
+
 def test_promotion_id_bridge_is_readonly_and_returns_no_visitor_fields():
     bridge = (
         Path(__file__).parents[1]

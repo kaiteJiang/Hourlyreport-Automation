@@ -78,6 +78,34 @@ def _health_failure(
     return RuntimeError(fallback)
 
 
+def current_project_health(
+    health: dict[str, Any],
+    project_id: str,
+    project_name: str,
+) -> tuple[bool, str]:
+    service_ready = (
+        health.get("status") == "ok"
+        and health.get("required_endpoints_available") is True
+    )
+    if not service_ready:
+        return False, "商务通自动数据源尚未就绪"
+    bound_ids = health.get("bound_project_ids")
+    if (
+        project_id
+        and isinstance(bound_ids, list)
+        and project_id not in {str(value) for value in bound_ids}
+    ):
+        label = project_name or project_id
+        return False, f"API 已启动，但{label}尚未映射"
+    label = project_name or project_id
+    return (
+        True,
+        f"{label}快商通 API 正常"
+        if label
+        else "商务通本地 API 正常：127.0.0.1:18766",
+    )
+
+
 def probe_kst_health(
     url: str,
     token: str,
@@ -180,6 +208,8 @@ class KstApiManager(QObject):
         self._retry_index = 0
         self._last_error_key: str | None = None
         self._last_error_log_at: float | None = None
+        self._current_project_id = ""
+        self._current_project_name = ""
         self._retry_timer = QTimer(self)
         self._retry_timer.setSingleShot(True)
         self._retry_timer.setInterval(self._retry_intervals_ms[0])
@@ -274,6 +304,37 @@ class KstApiManager(QObject):
     def status_detail(self) -> str:
         with self._lock:
             return self._detail
+
+    def set_current_project(
+        self,
+        project_id: str,
+        project_name: str,
+    ) -> None:
+        with self._lock:
+            self._current_project_id = str(project_id or "")
+            self._current_project_name = str(project_name or "")
+            registry = self._registry
+            cancel_event = self._cancel_event
+            generation = self._generation
+        if registry is None:
+            return
+        try:
+            health = _call_with_supported_keywords(
+                registry.health,
+                cancel_event=cancel_event,
+            )
+        except Exception:
+            return
+        ready, detail = current_project_health(
+            health,
+            self._current_project_id,
+            self._current_project_name,
+        )
+        with self._lock:
+            if generation != self._generation:
+                return
+            self._detail = detail
+        self._queue_status(generation, ready, detail)
 
     def _queue_status(
         self,
@@ -455,17 +516,27 @@ class KstApiManager(QObject):
         detail: str,
         *,
         log_message: str | None = None,
+        published_status: tuple[bool, str] | None = None,
     ) -> int | None:
+        published_ready, published_detail = (
+            published_status
+            if published_status is not None
+            else (True, detail)
+        )
         with self._lock:
             if not self._is_active_locked(generation, cancel_event):
                 return None
             self._ready = True
-            self._detail = detail
+            self._detail = published_detail
             self._retry_index = 0
             self._last_error_key = None
             self._last_error_log_at = None
             delay_ms = self._retry_intervals_ms[0]
-        self._queue_status(generation, True, detail)
+        self._queue_status(
+            generation,
+            published_ready,
+            published_detail,
+        )
         if log_message:
             self._emit_log(log_message)
         return delay_ms
@@ -601,10 +672,16 @@ class KstApiManager(QObject):
                 except Exception:
                     ready = False
                 if ready:
+                    published = current_project_health(
+                        health,
+                        self._current_project_id,
+                        self._current_project_name,
+                    )
                     return self._record_success(
                         generation,
                         cancel_event,
                         "商务通本地 API 正常：127.0.0.1:18766",
+                        published_status=published,
                     )
         try:
             if registry is None:
@@ -637,10 +714,16 @@ class KstApiManager(QObject):
             self._registry = registry if ready else None
             self._last_registry_refresh_at = now if ready else None
         if ready:
+            published = current_project_health(
+                health,
+                self._current_project_id,
+                self._current_project_name,
+            )
             return self._record_success(
                 generation,
                 cancel_event,
                 "商务通本地 API 正常：127.0.0.1:18766",
+                published_status=published,
             )
         return self._record_failure(
             generation,
@@ -705,11 +788,18 @@ class KstApiManager(QObject):
         port: int,
     ) -> None:
         failure: BaseException | str = "商务通本地 API 已停止"
+        health = self._registry_health()
+        published = current_project_health(
+            health,
+            self._current_project_id,
+            self._current_project_name,
+        )
         delay_ms = self._record_success(
             generation,
             cancel_event,
             f"商务通本地 API 已启动：127.0.0.1:{port}",
             log_message="商务通本地 API 已随程序启动",
+            published_status=published,
         )
         if delay_ms is not None:
             self._retry_requested.emit(delay_ms, generation)

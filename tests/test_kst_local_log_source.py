@@ -3,6 +3,7 @@ from pathlib import Path
 from modules.kst_local.log_source import (
     IncrementalLogSnapshotCache,
     parse_log_snapshot,
+    read_identity_promotion_ids_from_logs,
 )
 
 
@@ -278,3 +279,34 @@ def test_current_endpoint_url_overrides_historical_url(tmp_path: Path):
     assert snapshot.auth.endpoints["visitor_info"].startswith(
         "https://new.example/"
     )
+
+
+def test_identity_ids_only_use_current_structured_formal_log_values(
+    tmp_path: Path,
+):
+    (tmp_path / "app.log").write_text(
+        "\n".join(
+            [
+                (
+                    '[2026-07-31 09:00:00] payload '
+                    r'{\"visitorCustomField\":\"{\\\"promotionId\\\":\\\"10001\\\"}\"}'
+                ),
+                (
+                    '[2026-07-30 09:00:00] payload '
+                    r'{\"visitorCustomField\":\"{\\\"promotionId\\\":\\\"20001\\\"}\"}'
+                ),
+                '[2026-07-31 09:00:01] free text promotionId=30001',
+                (
+                    '[2026-07-31 09:00:02] payload '
+                    r'{\"visitorCustomField\":\"{\\\"promotionId\\\":\\\"99999\\\"}\"}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert read_identity_promotion_ids_from_logs(
+        tmp_path,
+        "2026-07-31",
+        {"10001", "20001", "30001"},
+    ) == {"10001"}

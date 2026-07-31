@@ -4,7 +4,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from modules.kst_local.db_reader import read_identity_promotion_ids
+from modules.kst_local.db_reader import (
+    KstDatabaseError,
+    read_identity_promotion_ids,
+)
 from modules.kst_local.discovery import KstDiscoveryError
 from modules.kst_local.fingerprint import (
     electron_identity_database_paths,
@@ -17,6 +20,9 @@ from modules.kst_local.legacy_db_reader import (
 )
 from modules.kst_local.legacy_discovery import legacy_installation_active
 from modules.kst_local.legacy_service import LegacyKstConversationService
+from modules.kst_local.log_source import (
+    read_identity_promotion_ids_from_logs,
+)
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
     KstInstallation,
@@ -73,6 +79,8 @@ def read_installation_promotion_ids(
     installation: KstInstallationLike,
     *,
     cancel_event: Any = None,
+    target_date: str | None = None,
+    allowed_ids: set[str] | None = None,
 ) -> set[str]:
     if isinstance(installation, LegacyKstInstallation):
         if installation.promotion_ids is not None:
@@ -87,7 +95,23 @@ def read_installation_promotion_ids(
             cancel_event=cancel_event,
         )
     if isinstance(installation, KstInstallation):
-        return read_identity_promotion_ids(installation)
+        database_error: KstDatabaseError | None = None
+        try:
+            promotion_ids = read_identity_promotion_ids(installation)
+        except KstDatabaseError as exc:
+            database_error = exc
+            promotion_ids = set()
+        if target_date and allowed_ids:
+            promotion_ids.update(
+                read_identity_promotion_ids_from_logs(
+                    installation.log_dir,
+                    target_date,
+                    allowed_ids,
+                )
+            )
+        if not promotion_ids and database_error is not None:
+            raise database_error
+        return promotion_ids
     raise _unsupported_installation()
 
 

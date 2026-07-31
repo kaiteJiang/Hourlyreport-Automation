@@ -3328,6 +3328,14 @@ class MainWindow(QMainWindow):
         self.on_project_selection_changed(self.project_combo.selected_project_ids())
 
     def on_project_selection_changed(self, selected_ids: list[str]) -> None:
+        if (
+            hasattr(self, "kst_api_manager")
+            and hasattr(self.kst_api_manager, "set_current_project")
+        ):
+            self.kst_api_manager.set_current_project(
+                self.selected_project_id(),
+                self.selected_project_name(),
+            )
         if not self.project_combo.is_multi_mode():
             self.progress_text.setText("环境已就绪，请选择任务开始执行")
             return

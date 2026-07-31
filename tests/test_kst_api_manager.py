@@ -4,7 +4,7 @@ import time
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from gui.kst_api_manager import KstApiManager
+from gui.kst_api_manager import KstApiManager, current_project_health
 from modules.kst_local.discovery import KstDiscoveryError
 from modules.kst_local.legacy_db_reader import KstLegacyDatabaseError
 
@@ -148,6 +148,25 @@ def test_manager_default_retry_interval_is_five_seconds(qapp, tmp_path):
 
     assert manager._retry_timer.interval() == 5_000
     manager.stop()
+
+
+def test_current_project_health_requires_selected_project_binding():
+    health = {
+        "status": "ok",
+        "required_endpoints_available": True,
+        "bound_project_ids": ["kunming_niu"],
+    }
+
+    assert current_project_health(
+        health,
+        "kunming_niu",
+        "昆明牛",
+    ) == (True, "昆明牛快商通 API 正常")
+    assert current_project_health(
+        health,
+        "shenyang_bai",
+        "沈阳白",
+    ) == (False, "API 已启动，但沈阳白尚未映射")
 
 
 def test_retry_timer_is_single_shot_with_bounded_backoff(qapp, tmp_path):

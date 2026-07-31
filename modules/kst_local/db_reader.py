@@ -155,6 +155,8 @@ def read_identity_promotion_ids(
     env = dict(os.environ)
     env["ELECTRON_RUN_AS_NODE"] = "1"
     promotion_ids: set[str] = set()
+    successful_databases = 0
+    first_error: KstDatabaseError | None = None
 
     for database_path in installation.database_paths:
         command = [
@@ -176,23 +178,32 @@ def read_identity_promotion_ids(
                 timeout=30,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            raise KstDatabaseError(
+            error = KstDatabaseError(
                 f"商务通推广 ID 只读桥执行失败：{database_path.name}"
-            ) from exc
+            )
+            first_error = first_error or error
+            continue
         try:
             payload = json.loads(completed.stdout)
         except (TypeError, json.JSONDecodeError) as exc:
-            raise KstDatabaseError(
+            error = KstDatabaseError(
                 f"商务通推广 ID 只读桥未返回有效 JSON：{database_path.name}"
-            ) from exc
+            )
+            first_error = first_error or error
+            continue
         values = payload.get("promotionIds") if isinstance(payload, dict) else None
         if not isinstance(values, list):
-            raise KstDatabaseError(
+            error = KstDatabaseError(
                 f"商务通推广 ID 只读桥响应缺少 promotionIds：{database_path.name}"
             )
+            first_error = first_error or error
+            continue
+        successful_databases += 1
         for value in values:
             normalized = str(value or "").strip()
             if normalized.isdigit() and len(normalized) >= 5:
                 promotion_ids.add(normalized)
 
+    if successful_databases == 0 and first_error is not None:
+        raise first_error
     return promotion_ids

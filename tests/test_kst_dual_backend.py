@@ -232,6 +232,28 @@ def test_backend_dispatches_promotion_id_reader(
     assert read_installation_promotion_ids(installation) == expected
 
 
+def test_electron_promotion_ids_union_database_and_formal_log_evidence(
+    electron_installation,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        backend,
+        "read_identity_promotion_ids",
+        lambda _installation: {"10001"},
+    )
+    monkeypatch.setattr(
+        backend,
+        "read_identity_promotion_ids_from_logs",
+        lambda _log_dir, _target_date, _allowed_ids: {"20001"},
+    )
+
+    assert read_installation_promotion_ids(
+        electron_installation,
+        target_date="2026-07-31",
+        allowed_ids={"10001", "20001"},
+    ) == {"10001", "20001"}
+
+
 def test_legacy_readiness_rejects_complete_but_unbound_empty_databases(
     legacy_installation,
 ):
