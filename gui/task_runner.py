@@ -54,6 +54,19 @@ def infer_stage(line: str) -> str | None:
     return None
 
 
+def should_warn_no_output(
+    stage: str,
+    elapsed_seconds: float,
+    *,
+    already_warned: bool,
+) -> bool:
+    return (
+        stage == "baidu"
+        and elapsed_seconds >= 45
+        and not already_warned
+    )
+
+
 def infer_pet_event(line: str) -> str | None:
     text = str(line or "").strip().lower()
     if not text:

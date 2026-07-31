@@ -12659,7 +12659,7 @@ def test_install_env_check_mode_is_parseable_and_has_no_side_effects():
 
 
 def test_desktop_gui_task_runner_infers_progress_stages():
-    from gui.task_runner import infer_pet_event, infer_stage
+    from gui.task_runner import infer_pet_event, infer_stage, should_warn_no_output
 
     assert infer_stage("[HERMES] Running hourly quick preflight...") == "preflight"
     assert infer_stage("[通知] 百度账号登录完成") == "login"
@@ -12671,6 +12671,10 @@ def test_desktop_gui_task_runner_infers_progress_stages():
     assert infer_stage("[降级] API 读取仍未完成，准备切换浏览器") == "baidu"
     assert infer_stage("[浏览器] 正在启动浏览器降级流程") == "login"
     assert infer_stage("[实际来源] API") == "baidu"
+    assert should_warn_no_output("baidu", 45.0, already_warned=False) is True
+    assert should_warn_no_output("baidu", 44.9, already_warned=False) is False
+    assert should_warn_no_output("kst", 90.0, already_warned=False) is False
+    assert should_warn_no_output("baidu", 90.0, already_warned=True) is False
     assert infer_pet_event("已填写百度登录字段：username") == "login"
     assert infer_pet_event("顶部用户名已匹配项目账号") == "login_ready"
     assert infer_pet_event("[1/4] 读取百度搜索推广数据") == "baidu"

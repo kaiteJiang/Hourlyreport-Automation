@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import sys
+import time
 from collections import deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -82,7 +83,7 @@ from gui.pet_settings import (
     save_pet_scale,
 )
 from gui.project_store import ProjectSummary, load_project_summaries
-from gui.task_runner import QtTaskRunner, infer_pet_event
+from gui.task_runner import QtTaskRunner, infer_pet_event, should_warn_no_output
 from modules.task_stop_gate import (
     STOP_GATE_ENV,
     TASK_CANCELLED_EXIT_CODE,
@@ -1672,6 +1673,9 @@ class MainWindow(QMainWindow):
         self._task_stop_requested = False
         self._task_stop_locked = False
         self._task_active = False
+        self._task_observed_stage = ""
+        self._task_last_output_at = 0.0
+        self._task_output_warning_sent = False
         self._task_stop_gate: Path | None = None
         self._multi_task_active = False
         self._saved_multi_project_ids: list[str] = []
@@ -1691,6 +1695,9 @@ class MainWindow(QMainWindow):
         self.runner.started.connect(self.on_task_started)
         self.runner.finished.connect(self.on_task_finished)
         self.runner.failed_to_start.connect(self.show_task_error)
+        self._task_output_watchdog = QTimer(self)
+        self._task_output_watchdog.setInterval(1000)
+        self._task_output_watchdog.timeout.connect(self.check_task_output_watchdog)
 
         self.environment_runner = QtTaskRunner(self)
         self.environment_runner.output.connect(self.on_environment_install_output)
@@ -4113,6 +4120,9 @@ class MainWindow(QMainWindow):
 
     def on_task_started(self) -> None:
         self._task_active = True
+        self._task_last_output_at = time.monotonic()
+        self._task_output_warning_sent = False
+        self._task_output_watchdog.start()
         self.set_task_buttons_enabled(False)
         self.set_stop_controls()
         self.set_data_source_control_locked(True)
@@ -4141,6 +4151,8 @@ class MainWindow(QMainWindow):
             self.runner.stop()
 
     def on_task_output(self, text: str) -> None:
+        self._task_last_output_at = time.monotonic()
+        self._task_output_warning_sent = False
         self.append_log(text)
         event = infer_pet_event(text)
         if not event or event == self._last_pet_event:
@@ -4161,7 +4173,22 @@ class MainWindow(QMainWindow):
         if message:
             self.desktop_pet.announce(message[0], message[1])
 
+    def check_task_output_watchdog(self) -> None:
+        if not self._task_active:
+            return
+        elapsed = time.monotonic() - self._task_last_output_at
+        if not should_warn_no_output(
+            self._task_observed_stage,
+            elapsed,
+            already_warned=self._task_output_warning_sent,
+        ):
+            return
+        self._task_output_warning_sent = True
+        self.progress_text.setText("百度 API 暂无新输出，任务仍在运行，可点击停止。")
+        self.append_log("[提示] 百度 API 已 45 秒没有新输出；任务仍在运行，停止按钮仍可使用。")
+
     def on_task_finished(self, exit_code: int) -> None:
+        self._task_output_watchdog.stop()
         stopped_by_user = exit_code == TASK_CANCELLED_EXIT_CODE or (
             self._task_stop_requested and not self._multi_task_active
         )
@@ -4257,6 +4284,7 @@ class MainWindow(QMainWindow):
         self._schedule_deferred_exit()
 
     def show_task_error(self, message: str) -> None:
+        self._task_output_watchdog.stop()
         clear_task_stop_gate(self._task_stop_gate)
         self._task_stop_gate = None
         self._task_active = False
@@ -4309,6 +4337,7 @@ class MainWindow(QMainWindow):
             self._refresh_widget_style(label)
 
     def mark_stage(self, stage: str) -> None:
+        self._task_observed_stage = stage
         keys = [item[0] for item in STAGES]
         if stage not in keys:
             return
