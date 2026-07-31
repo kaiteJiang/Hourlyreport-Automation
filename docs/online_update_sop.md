@@ -2,7 +2,7 @@
 
 ## 基线
 
-`2026.7.29.117` 是当前标准安装器基线。新电脑只分发 `Hourlyreport_automation_setup_v2026.7.29.117.exe`，用户选择目录后一次安装完成。
+`2026.7.31.118` 是当前标准安装器基线。新电脑只分发 `Hourlyreport_automation_setup_v2026.7.31.118.exe`，用户选择目录后一次安装完成。
 
 `Hourlyreport_automation_v*.zip` 只供客户端在线更新，故意排除 `configs/` 和其他用户数据，不能作为新电脑安装包。若误启动不完整的更新目录，GUI 应给出安装提示并安全退出，不显示 Python 异常堆栈。
 
@@ -37,11 +37,11 @@
 6. 生成包含默认配置但不含真实凭据的标准安装器，以及只含程序文件的在线更新包：
 
 ```cmd
-.venv\Scripts\python.exe tools\build_publish_release.py --version 2026.7.29.117
+.venv\Scripts\python.exe tools\build_publish_release.py --version 2026.7.31.118
 ```
 
-7. 验证 `dist/` 只包含 `Hourlyreport_automation_v2026.7.29.117.zip` 和 `Hourlyreport_automation_setup_v2026.7.29.117.exe`。
-8. GitHub Release tag 使用 `v2026.7.29.117`，在线更新资产名为 `Hourlyreport_automation_v2026.7.29.117.zip`；完整安装器名为 `Hourlyreport_automation_setup_v2026.7.29.117.exe`，两者用途不同。
+7. 验证 `dist/` 只包含 `Hourlyreport_automation_v2026.7.31.118.zip` 和 `Hourlyreport_automation_setup_v2026.7.31.118.exe`。
+8. GitHub Release tag 使用 `v2026.7.31.118`，在线更新资产名为 `Hourlyreport_automation_v2026.7.31.118.zip`；完整安装器名为 `Hourlyreport_automation_setup_v2026.7.31.118.exe`，两者用途不同。
 9. 读取 GitHub `releases/latest` 的真实响应，用上一正式版本号验证 tag、资产名、SHA-256、大小和下载链接均能被更新器识别。
 10. 在一台已安装上一版本的测试电脑上验证“发现更新、下载、安装、重启、保留配置”完整流程，并把完整安装器安装到临时目录，验证重复安装不会覆盖已有配置。
 11. 为每个版本保存中文更新说明，至少包含用户可感知改动、稳定性修复和兼容性注意事项，并复制到 GitHub Release 正文。
