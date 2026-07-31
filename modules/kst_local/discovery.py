@@ -423,6 +423,12 @@ def discover_all_installations(
     electron_explicit_root = (
         None if is_explicit_legacy_root else configured_root
     )
+    electron_data_root = settings.data_root
+    if (
+        electron_data_root is not None
+        and electron_data_root.name.casefold() == "onlinewebcsnew"
+    ):
+        electron_data_root = electron_data_root.parent
     legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
     discovery_errors: list[KstDiscoveryError] = []
@@ -431,6 +437,7 @@ def discover_all_installations(
             installations.extend(
                 discover_installations(
                     explicit_root=electron_explicit_root,
+                    local_app_data=electron_data_root,
                     require_running_process=require_running_process,
                 )
             )

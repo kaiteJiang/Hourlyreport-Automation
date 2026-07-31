@@ -3,15 +3,18 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from modules.kst_local.discovery import (
     KstDiscoveryError,
     _client_process_running,
+    discover_all_installations,
     discover_installation,
     discover_installations,
 )
+from modules.kst_local.machine_settings import save_kst_machine_settings
 
 
 def _build_installation(tmp_path: Path) -> tuple[Path, Path]:
@@ -214,3 +217,46 @@ def test_client_process_check_runs_without_a_console_window():
         ) == subprocess.CREATE_NO_WINDOW
     else:
         assert "creationflags" not in kwargs
+
+
+@pytest.mark.parametrize("select_child", [False, True])
+def test_discover_all_uses_configured_electron_data_root(
+    tmp_path,
+    monkeypatch,
+    select_child,
+):
+    selected_root = tmp_path / "selected"
+    online_data_root = selected_root / "OnlineWebCSNew"
+    online_data_root.mkdir(parents=True)
+    save_kst_machine_settings(
+        tmp_path,
+        installation_root=None,
+        data_root=(online_data_root if select_child else selected_root),
+    )
+    installation = SimpleNamespace(
+        root=tmp_path / "program",
+        identity="demo",
+        client_family="electron",
+    )
+    received = []
+
+    def fake_discover_installations(**kwargs):
+        received.append(kwargs)
+        return [installation]
+
+    monkeypatch.setattr(
+        "modules.kst_local.discovery.discover_installations",
+        fake_discover_installations,
+    )
+    monkeypatch.setattr(
+        "modules.kst_local.legacy_discovery.discover_legacy_installations",
+        lambda **_kwargs: [],
+    )
+
+    found = discover_all_installations(
+        tmp_path,
+        require_running_process=False,
+    )
+
+    assert list(found) == [installation]
+    assert received[0]["local_app_data"] == selected_root.resolve()

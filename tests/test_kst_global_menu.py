@@ -97,7 +97,7 @@ def test_system_menu_contains_global_kst_submenu(qapp):
     window.close()
 
 
-def test_inline_kst_path_controls_emit_requests_and_follow_api_mode(
+def test_inline_kst_path_controls_emit_requests_and_keep_rescan_available(
     qapp,
 ):
     menu = InlineConfigMenu()
@@ -122,11 +122,11 @@ def test_inline_kst_path_controls_emit_requests_and_follow_api_mode(
 
     menu.sync("hidden", 1.0, False, "export")
 
-    assert menu.kst_rescan_choice.isEnabled() is False
+    assert menu.kst_rescan_choice.isEnabled() is True
     menu.close()
 
 
-def test_path_failure_opens_only_one_matching_directory_dialog(
+def test_path_failure_does_not_open_directory_dialog(
     qapp,
     tmp_path,
 ):
@@ -154,7 +154,7 @@ def test_path_failure_opens_only_one_matching_directory_dialog(
         "快商通数据目录无效",
     )
 
-    assert prompts == ["installation"]
+    assert prompts == []
     window.stop_kst_api()
     window.close()
 
@@ -299,7 +299,7 @@ def test_kst_machine_settings_save_failure_keeps_file_and_skips_rescan(
     window.close()
 
 
-def test_export_mode_disables_rescan_without_starting_manager(
+def test_export_mode_rescan_switches_to_api_and_scans_once(
     qapp,
     tmp_path,
 ):
@@ -311,8 +311,9 @@ def test_export_mode_disables_rescan_without_starting_manager(
     )
     QApplication.processEvents()
 
-    assert window.kst_rescan_action.isEnabled() is False
+    assert window.kst_rescan_action.isEnabled() is True
     window.rescan_kst_api()
-    assert (fake.start_calls, fake.rescan_calls) == (0, 0)
+    assert window.kst_data_source == "local_api"
+    assert (fake.start_calls, fake.rescan_calls) == (1, 1)
 
     window.close()

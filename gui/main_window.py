@@ -950,9 +950,7 @@ class InlineConfigMenu(QFrame):
             self.kst_export_choice,
             kst_data_source == "export",
         )
-        self.kst_rescan_choice.setEnabled(
-            kst_data_source == "local_api"
-        )
+        self.kst_rescan_choice.setEnabled(True)
         value = round(normalize_pet_scale(pet_scale) * 100)
         self.size_slider.blockSignals(True)
         self.size_slider.setValue(value)
@@ -3400,7 +3398,7 @@ class MainWindow(QMainWindow):
         is_api = self.kst_data_source == "local_api"
         self.kst_api_action.setChecked(is_api)
         self.kst_export_action.setChecked(not is_api)
-        self.kst_rescan_action.setEnabled(is_api)
+        self.kst_rescan_action.setEnabled(True)
         if hasattr(self, "inline_config_menu"):
             self.inline_config_menu.sync(
                 getattr(self, "pet_mode", PET_CLAWD),
@@ -3489,31 +3487,17 @@ class MainWindow(QMainWindow):
         self.rescan_kst_api()
 
     def rescan_kst_api(self) -> None:
-        if (
-            self.kst_data_source != "local_api"
-            or self._application_exiting
-        ):
+        if self._application_exiting:
             return
+        if self.kst_data_source != "local_api":
+            self.set_global_kst_data_source("local_api")
+            if self.kst_data_source != "local_api":
+                return
         self.start_kst_api()
         self.kst_api_manager.rescan()
 
     def on_kst_api_status_changed(self, ready: bool, detail: str) -> None:
         self.kst_status_control.set_api_ready(ready, detail)
-        if (
-            ready
-            or self._application_exiting
-            or self.kst_data_source != "local_api"
-            or self._kst_path_prompted
-        ):
-            return
-        chooser = {
-            "快商通客户端目录无效": self.choose_kst_installation_root,
-            "快商通数据目录无效": self.choose_kst_data_root,
-        }.get(str(detail or "").strip())
-        if chooser is None:
-            return
-        self._kst_path_prompted = True
-        chooser()
 
     def set_excel_auto_open(self, enabled: bool) -> None:
         previous = self.open_excel_automatically
