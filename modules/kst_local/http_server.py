@@ -13,6 +13,18 @@ from modules.kst_local.auth import local_health_proof
 ServiceFactory = Callable[[str, str], Any]
 HealthProvider = Callable[[], dict[str, Any]]
 
+_SAFE_FAILURE_DETAILS = {
+    "client_not_running": "客户端未运行",
+    "client_path_mismatch": "客户端程序与运行进程不匹配",
+    "inactive_log": "未检测到活动身份",
+    "database_incompatible": "数据库结构不兼容",
+    "database_busy_or_timeout": "数据库忙或读取超时",
+    "identity_mapping": "快商通身份映射未就绪",
+    "installation_root": "快商通客户端目录无效",
+    "data_root": "快商通数据目录无效",
+    "discovery_failed": "快商通客户端发现失败",
+}
+
 
 def create_server(
     host: str,
@@ -119,8 +131,18 @@ def create_server(
                         service.build_daily_report(target_date),
                     )
                     return
-            except Exception:
-                self._send(502, {"error": "kst_data_unavailable"})
+            except Exception as exc:
+                category = str(getattr(exc, "category", "")).strip()
+                detail = _SAFE_FAILURE_DETAILS.get(category)
+                payload = {"error": "kst_data_unavailable"}
+                if detail:
+                    payload.update(
+                        {
+                            "error_category": category,
+                            "error_detail": detail,
+                        }
+                    )
+                self._send(502, payload)
                 return
             self._send(404, {"error": "not_found"})
 

@@ -27,6 +27,25 @@ ATTEMPT_ERROR_SUMMARIES = {
 }
 
 
+def _safe_attempt_detail(category: str, message: str) -> str:
+    if category != "integrity_error":
+        return ATTEMPT_ERROR_SUMMARIES[category]
+    checks = (
+        ("日期不一致", "百度 API 返回日期不一致"),
+        ("缺少日期", "百度 API 返回账户日期缺失"),
+        ("未知推广 ID", "百度 API 返回未知推广账户"),
+        ("重复账户", "百度 API 返回重复账户"),
+        ("有限数字", "百度 API 返回字段数值异常"),
+        ("负数", "百度 API 返回字段数值异常"),
+        ("汇总校验失败", "百度 API 汇总校验失败"),
+        ("未返回完整汇总", "百度 API 汇总校验失败"),
+    )
+    return next(
+        (detail for marker, detail in checks if marker in message),
+        ATTEMPT_ERROR_SUMMARIES[category],
+    )
+
+
 class BaiduReportApiError(RuntimeError):
     def __init__(
         self,
@@ -354,10 +373,17 @@ def _write_attempt_report(
     category: str,
     message: str,
 ) -> None:
-    del message
     safe_category = str(category or "api_error")
     if safe_category not in ATTEMPT_ERROR_SUMMARIES:
         safe_category = "api_error"
+    source = config.get("baidu_source") or {}
+    baidu = config.get("baidu") or {}
+    source_id = str(source.get("source_id") or "default")
+    source_name = str(
+        source.get("source_name")
+        or config.get("project_name")
+        or source_id
+    )
     _write_json_atomic(
         root / "reports" / "baidu_api_attempt_report.json",
         {
@@ -367,8 +393,12 @@ def _write_attempt_report(
             "date": selected_date,
             "period": period,
             "source": "baidu_open_api",
+            "source_id": source_id,
+            "source_name": source_name,
+            "api_profile": str(baidu.get("api_profile") or ""),
             "error_category": safe_category,
             "errors": [ATTEMPT_ERROR_SUMMARIES[safe_category]],
+            "safe_detail": _safe_attempt_detail(safe_category, message),
             "finished_at": datetime.now().isoformat(timespec="seconds"),
         },
     )

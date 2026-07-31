@@ -26,8 +26,30 @@ from modules.validators import (
 class KstLocalSourceError(RuntimeError):
     """小时报无法从回环商务通 API 取得可信结果。"""
 
+    def __init__(self, message: str, *, category: str = "api_unavailable") -> None:
+        super().__init__(message)
+        self.category = (
+            category
+            if category in _SAFE_FAILURE_DETAILS
+            else "api_unavailable"
+        )
+
 
 Transport = Callable[[str, dict[str, str], int], Any]
+
+_SAFE_FAILURE_DETAILS = {
+    "api_unavailable": "商务通本地 API 不可用",
+    "client_not_running": "客户端未运行",
+    "database_incompatible": "数据库结构不兼容",
+    "database_busy_or_timeout": "数据库忙或读取超时",
+    "identity_mapping": "快商通身份映射未就绪",
+    "installation_root": "快商通客户端目录无效",
+    "data_root": "快商通数据目录无效",
+}
+
+
+def _safe_failure_detail(category: str) -> str:
+    return _SAFE_FAILURE_DETAILS.get(category, _SAFE_FAILURE_DETAILS["api_unavailable"])
 
 
 def _default_transport(
@@ -39,7 +61,17 @@ def _default_transport(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        category = str(payload.get("error_category") or "api_unavailable")
+        raise KstLocalSourceError(
+            _safe_failure_detail(category),
+            category=category,
+        ) from None
+    except (urllib.error.URLError, TimeoutError):
         raise KstLocalSourceError("商务通本地 API 请求失败") from None
     try:
         return json.loads(body)
@@ -75,6 +107,8 @@ def write_unavailable_zero_result(
     period: str | None,
     target_date: str | None,
     reason: str,
+    *,
+    error_category: str = "api_unavailable",
 ) -> dict[str, Any]:
     summary = {
         "raw_rows": 0,
@@ -100,6 +134,7 @@ def write_unavailable_zero_result(
         "source": payload["source"],
         "passed": True,
         "summary": summary,
+        "diagnostics": {"error_category": error_category},
         "warnings": [reason],
         "errors": [],
     }
@@ -184,15 +219,17 @@ def fetch_kst_local_report(
             raise KstLocalSourceError("商务通本地 API 响应缺少账户统计")
         if validate_kst_report(payload, get_required_accounts(config)):
             raise KstLocalSourceError("商务通本地 API 响应账户统计不完整")
-    except KstLocalSourceError:
+    except KstLocalSourceError as exc:
         if not bool(kst_config.get("allow_zero_on_unavailable")):
             raise
+        safe_detail = _safe_failure_detail(exc.category)
         return write_unavailable_zero_result(
             config,
             root,
             period,
             target_date,
-            "商务通本地 API 不可用，商务通指标已按 0 继续",
+            f"{safe_detail}，商务通指标已按 0 继续",
+            error_category=exc.category,
         )
 
     reports_dir = root / "reports"
@@ -298,6 +335,8 @@ def write_unavailable_daily_zero_result(
     root: Path,
     target_date: str | None,
     reason: str,
+    *,
+    error_category: str = "api_unavailable",
 ) -> dict[str, Any]:
     resolved_date = target_date or default_daily_kst_date()
     summary = {
@@ -324,6 +363,7 @@ def write_unavailable_daily_zero_result(
         "source": "kst_local_api_unavailable_zero",
         "passed": True,
         "summary": summary,
+        "diagnostics": {"error_category": error_category},
         "warnings": [reason],
         "errors": [],
     }
@@ -384,14 +424,16 @@ def fetch_kst_local_daily_report(
             raise KstLocalSourceError("商务通本地 API 日报返回校验错误")
         if _daily_payload_errors(payload, get_required_accounts(config)):
             raise KstLocalSourceError("商务通本地 API 日报账户统计不完整")
-    except KstLocalSourceError:
+    except KstLocalSourceError as exc:
         if not bool(kst_config.get("allow_zero_on_unavailable")):
             raise
+        safe_detail = _safe_failure_detail(exc.category)
         return write_unavailable_daily_zero_result(
             config,
             root,
             resolved_date,
-            "商务通本地 API 不可用，商务通日报指标已按 0 继续",
+            f"{safe_detail}，商务通日报指标已按 0 继续",
+            error_category=exc.category,
         )
 
     parse_report = {

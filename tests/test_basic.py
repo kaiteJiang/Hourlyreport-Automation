@@ -12768,7 +12768,15 @@ def test_task4_attempt_report_redacts_sensitive_exception_message(tmp_path):
 
     _write_attempt_report(
         tmp_path,
-        config={"project_id": "demo", "project_name": "示例项目"},
+        config={
+            "project_id": "demo",
+            "project_name": "示例项目",
+            "baidu_source": {
+                "source_id": "source_b",
+                "source_name": "来源 B",
+            },
+            "baidu": {"api_profile": "source_b_profile"},
+        },
         selected_date="2026-07-17",
         period="15点",
         category="network_error",
@@ -12782,6 +12790,10 @@ def test_task4_attempt_report_redacts_sensitive_exception_message(tmp_path):
     serialized = json.dumps(attempt, ensure_ascii=False)
     assert attempt["error_category"] == "network_error"
     assert attempt["errors"] == ["百度 API 网络请求失败，请稍后重试"]
+    assert attempt["source_id"] == "source_b"
+    assert attempt["source_name"] == "来源 B"
+    assert attempt["api_profile"] == "source_b_profile"
+    assert attempt["safe_detail"] == "百度 API 网络请求失败，请稍后重试"
     for sensitive in ("https://", "accessToken", "refreshToken", "token=", "secret", "password", "header", "X-Api-Key"):
         assert sensitive not in serialized
 

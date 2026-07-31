@@ -120,6 +120,33 @@ def test_api_unavailable_can_emit_zero_kst_report(tmp_path):
     )
 
 
+def test_zero_fallback_report_keeps_only_safe_failure_category(tmp_path):
+    config = _config()
+    config["kst"]["allow_zero_on_unavailable"] = True
+    private_detail = "private_identity promotionId=12345678"
+
+    result = fetch_kst_local_report(
+        config,
+        tmp_path,
+        "15点",
+        target_date="2026-07-31",
+        transport=lambda *_: (_ for _ in ()).throw(
+            KstLocalSourceError(
+                private_detail,
+                category="identity_mapping",
+            )
+        ),
+    )
+
+    report = result["parse_report"]
+    serialized = json.dumps(report, ensure_ascii=False)
+    assert report["diagnostics"] == {
+        "error_category": "identity_mapping",
+    }
+    assert report["warnings"] == ["快商通身份映射未就绪，商务通指标已按 0 继续"]
+    assert private_detail not in serialized
+
+
 def test_api_unavailable_still_raises_without_opt_in(tmp_path):
     with pytest.raises(KstLocalSourceError, match="请求失败"):
         fetch_kst_local_report(
