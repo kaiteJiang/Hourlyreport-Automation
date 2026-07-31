@@ -4,6 +4,7 @@ from collections import OrderedDict, defaultdict
 from datetime import date
 import inspect
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any, Callable
@@ -62,6 +63,10 @@ _SAFE_FAILURE_DETAILS = {
     "data_root": "快商通数据目录无效",
     "discovery_failed": "快商通客户端发现失败",
 }
+_SAFE_LEGACY_SCHEMA_DETAIL = re.compile(
+    r"^老版快商通(?:历史库|消息库)缺少必要(?:数据表|字段)："
+    r"[A-Za-z0-9_/、]+$"
+)
 
 
 def _safe_failure(error: BaseException) -> tuple[str, str]:
@@ -70,7 +75,14 @@ def _safe_failure(error: BaseException) -> tuple[str, str]:
     ).strip()
     if category not in _SAFE_FAILURE_DETAILS:
         category = "identity_mapping"
-    return category, _SAFE_FAILURE_DETAILS[category]
+    detail = _SAFE_FAILURE_DETAILS[category]
+    candidate = str(error or "").strip()
+    if (
+        category == "database_incompatible"
+        and _SAFE_LEGACY_SCHEMA_DETAIL.fullmatch(candidate) is not None
+    ):
+        detail = candidate
+    return category, detail
 
 
 def _identity_fingerprints_match(
@@ -162,7 +174,7 @@ def _required_endpoints_available(
         target_date,
         auth_date=target_date,
     )
-    required = {"visitor_info", "visitor_card", "tag_dictionary"}
+    required = {"visitor_card", "tag_dictionary"}
     return (
         required.issubset(snapshot.auth.endpoints)
         and bool(snapshot.auth.common_query)

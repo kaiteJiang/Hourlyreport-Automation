@@ -424,6 +424,8 @@ def discover_all_installations(
         None if is_explicit_legacy_root else configured_root
     )
     electron_data_root = settings.data_root
+    if is_explicit_legacy_root:
+        electron_data_root = None
     if (
         electron_data_root is not None
         and electron_data_root.name.casefold() == "onlinewebcsnew"
@@ -432,19 +434,18 @@ def discover_all_installations(
     legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
     discovery_errors: list[KstDiscoveryError] = []
-    if not is_explicit_legacy_root:
-        try:
-            installations.extend(
-                discover_installations(
-                    explicit_root=electron_explicit_root,
-                    local_app_data=electron_data_root,
-                    require_running_process=require_running_process,
-                )
+    try:
+        installations.extend(
+            discover_installations(
+                explicit_root=electron_explicit_root,
+                local_app_data=electron_data_root,
+                require_running_process=require_running_process,
             )
-        except KstDiscoveryError as exc:
-            if electron_explicit_root is not None:
-                raise
-            discovery_errors.append(exc)
+        )
+    except KstDiscoveryError as exc:
+        if electron_explicit_root is not None:
+            raise
+        discovery_errors.append(exc)
     if configured_root is None or is_explicit_legacy_root:
         try:
             legacy_result = discover_legacy_installations(
@@ -458,7 +459,13 @@ def discover_all_installations(
                 getattr(legacy_result, "diagnostics", ()) or ()
             )
         except KstDiscoveryError as exc:
-            if legacy_explicit_root is not None or settings.data_root is not None:
+            if (
+                not installations
+                and (
+                    legacy_explicit_root is not None
+                    or settings.data_root is not None
+                )
+            ):
                 raise
             discovery_errors.append(exc)
     unique: dict[tuple[str, Path, str], KstInstallationLike] = {}

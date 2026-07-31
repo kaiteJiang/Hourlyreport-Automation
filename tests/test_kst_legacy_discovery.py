@@ -58,11 +58,12 @@ def sqlite_history(path):
 
 
 def sqlite_messages(path):
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     try:
         connection.execute(
-            "CREATE TABLE DIALOGRECORD_VISITOR (recId TEXT, addTime TEXT)"
+            "CREATE TABLE DIALOGRECORD_VISITOR "
+            "(recId TEXT, addTime TEXT, recType INTEGER)"
         )
         connection.commit()
     finally:
@@ -85,8 +86,9 @@ def make_legacy_tree(tmp_path):
         data / "db" / "company-a" / "agent-a" / "07290900-onlie" / "agent-a_CS.pdb"
     ) as connection:
         connection.execute(
-            "INSERT INTO DIALOGRECORD_VISITOR (recId, addTime) VALUES (?, ?)",
-            ("live-identity", "2026-07-29 09:00:01"),
+            "INSERT INTO DIALOGRECORD_VISITOR "
+            "(recId, addTime, recType) VALUES (?, ?, ?)",
+            ("live-identity", "2026-07-29 09:00:01", 1),
         )
     with sqlite3.connect(
         data / "db" / "company-a" / "company-a_HIS.cdb"
@@ -167,6 +169,56 @@ def test_legacy_discovery_returns_each_capable_company_identity(tmp_path):
         "agent-a_CS.pdb"
     ]
     assert found[0].promotion_ids == frozenset({"10001"})
+
+
+def test_legacy_discovery_includes_numbered_cs_shards_and_skips_copy_names(
+    tmp_path,
+):
+    install, data = make_legacy_tree(tmp_path)
+    shard_dir = (
+        data
+        / "db"
+        / "company-a"
+        / "agent-a"
+        / "07290900-onlie"
+    )
+    numbered = shard_dir / "agent-a_10CS.pdb"
+    copied = shard_dir / "agent-a_10CS (1).pdb"
+    sqlite_messages(numbered)
+    sqlite_messages(copied)
+
+    found = discover_legacy_installations(
+        explicit_root=install,
+        explicit_data_root=data,
+        process_paths=[install / "OnlineCS.exe"],
+        now_timestamp=(data / "logs" / "260729090000.log").stat().st_mtime,
+    )
+
+    assert [path.name for path in found[0].message_database_paths] == [
+        "agent-a_10CS.pdb",
+        "agent-a_CS.pdb",
+    ]
+
+
+def test_incomplete_new_identity_does_not_block_capable_peer(
+    tmp_path,
+):
+    install, data = make_legacy_tree(tmp_path)
+    incomplete = data / "db" / "company-new"
+    incomplete.mkdir()
+    (incomplete / "company-new_HIS.cdb").write_bytes(b"")
+
+    found = discover_legacy_installations(
+        explicit_root=install,
+        explicit_data_root=data,
+        process_paths=[install / "OnlineCS.exe"],
+        now_timestamp=(data / "logs" / "260729090000.log").stat().st_mtime,
+    )
+
+    assert [item.identity for item in found] == ["company-a"]
+    assert [
+        diagnostic.category for diagnostic in found.diagnostics
+    ] == ["database_incompatible"]
 
 
 @pytest.mark.parametrize("bad_kind", ["corrupt", "missing_rec_id", "missing_add_time"])
@@ -509,7 +561,7 @@ def test_legacy_reader_uses_same_dynamic_shard_manifest_as_pre_fingerprint(
     scans = []
 
     def add_bad_shard_before_pre_fingerprint(path, pattern):
-        if path == company_dir and pattern == "*_CS.pdb":
+        if path == company_dir and pattern == "*CS.pdb":
             scans.append(1)
             if len(scans) == 2:
                 bad_shard = (
@@ -604,7 +656,7 @@ def test_running_legacy_process_probe_uses_lightweight_native_path_reader(
     assert legacy_discovery.running_kst_process_paths() == expected
 
 
-def test_environment_legacy_root_is_explicit_and_never_sent_to_electron(
+def test_environment_legacy_root_is_explicit_and_keeps_electron_automatic(
     tmp_path,
     monkeypatch,
 ):
@@ -645,8 +697,68 @@ def test_environment_legacy_root_is_explicit_and_never_sent_to_electron(
     )
     discover_all_installations(tmp_path, require_running_process=True)
 
-    assert electron_calls == []
+    assert electron_calls == [
+        {
+            "explicit_root": None,
+            "local_app_data": None,
+            "require_running_process": True,
+        }
+    ]
     assert legacy_calls[0]["explicit_root"] == install.resolve()
+
+
+def test_explicit_legacy_settings_keep_automatic_electron_when_legacy_stops(
+    tmp_path,
+    monkeypatch,
+):
+    install, data = make_legacy_tree(tmp_path)
+    save_kst_machine_settings(
+        tmp_path,
+        installation_root=install,
+        data_root=data,
+    )
+    electron_item = type(
+        "ElectronInstallation",
+        (),
+        {
+            "root": tmp_path / "electron",
+            "identity": "kunming-electron",
+            "client_family": "electron",
+        },
+    )()
+    electron_calls = []
+
+    def fake_electron(**kwargs):
+        electron_calls.append(kwargs)
+        return [electron_item]
+
+    monkeypatch.setattr(
+        discovery,
+        "discover_installations",
+        fake_electron,
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "discover_legacy_installations",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            KstDiscoveryError(
+                "客户端未运行",
+                category="client_not_running",
+            )
+        ),
+    )
+
+    result = discover_all_installations(
+        tmp_path,
+        require_running_process=True,
+    )
+
+    assert list(result) == [electron_item]
+    assert electron_calls[0]["explicit_root"] is None
+    assert electron_calls[0]["local_app_data"] is None
+    assert [item.category for item in result.diagnostics] == [
+        "client_not_running"
+    ]
 
 
 def test_machine_electron_root_overrides_legacy_environment_candidate(

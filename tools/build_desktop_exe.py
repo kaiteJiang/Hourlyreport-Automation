@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -86,6 +87,16 @@ def write_build_manifest(root: str | Path, executable: str | Path, version: str 
     return manifest_path
 
 
+def _atomic_copy(source: Path, destination: Path) -> None:
+    temporary = destination.with_name(destination.name + ".tmp")
+    try:
+        shutil.copy2(source, temporary)
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def build_desktop_exe(
     root: str | Path,
     *,
@@ -127,8 +138,14 @@ def build_desktop_exe(
         output,
         build_version,
     )
+    root_output = root_path / output.name
+    root_manifest = root_path / BUILD_MANIFEST_NAME
+    if output.resolve() != root_output.resolve():
+        _atomic_copy(output, root_output)
+        _atomic_copy(manifest, root_manifest)
     print(f"[完成] 单文件 GUI：{output}")
     print(f"[完成] 构建清单：{manifest}")
+    print(f"[完成] 根目录 GUI：{root_output}")
     return 0
 
 

@@ -385,3 +385,52 @@ def test_service_uses_cached_log_tags_when_live_tag_endpoint_is_unavailable():
     conversations = service.collect("2026-07-27")
 
     assert conversations[0].tags == ("有效-三句", "转潜-有效")
+
+
+def test_service_uses_readonly_database_fields_when_visitor_endpoint_is_absent():
+    class DatabaseOnlyClient(FakeClient):
+        def load_visitor(self, rec_id):
+            raise AssertionError("visitor endpoint must not be called")
+
+        def load_card(self, visitor_id):
+            raise AssertionError("visitor card endpoint must not be called")
+
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={
+            "101": frozenset({"startup_auto_sync"}),
+        },
+        auth=KstAuthContext(
+            common_query={"compId": "1"},
+            headers={"X-Client": "desktop"},
+            endpoints={
+                "visitor_card": "https://example/card",
+                "tag_dictionary": "https://example/tags",
+            },
+        ),
+        tag_dictionary={
+            "11": "有效-三句",
+            "12": "转潜-有效",
+        },
+    )
+    candidate = KstCacheCandidate(
+        rec_id="101",
+        start_time="2026-07-27 08:59:58",
+        promotion_id="72828178",
+        visitor_messages=1,
+        tag_ids='{"11":1,"12":1}',
+        keyword="测试词",
+    )
+    service = KstConversationService(
+        config=_config(),
+        snapshot=snapshot,
+        candidates=[candidate],
+        client=DatabaseOnlyClient(),
+    )
+
+    conversations = service.collect("2026-07-27")
+
+    assert len(conversations) == 1
+    assert conversations[0].start_time == "2026-07-27 08:59:58"
+    assert conversations[0].promotion_id == "72828178"
+    assert conversations[0].visitor_messages == 1
+    assert conversations[0].tags == ("有效-三句", "转潜-有效")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from modules.kst_local.db_reader import (
@@ -10,9 +9,9 @@ from modules.kst_local.db_reader import (
 )
 from modules.kst_local.discovery import KstDiscoveryError
 from modules.kst_local.fingerprint import (
+    capture_installation_identity,
     electron_identity_database_paths,
     installation_identity_fingerprint,
-    legacy_identity_database_paths,
 )
 from modules.kst_local.legacy_db_reader import (
     KstLegacyDatabaseError,
@@ -64,14 +63,6 @@ def _runtime_input_state(
         installation,
         target_date,
         snapshot,
-    )
-
-
-def _legacy_database_paths(
-    installation: LegacyKstInstallation,
-) -> tuple[Path, ...]:
-    return legacy_identity_database_paths(
-        installation,
     )
 
 
@@ -219,11 +210,11 @@ def build_installation_runtime(
                 "老版快商通身份缺少可用推广 ID",
                 category="identity_mapping",
             )
-        paths = _legacy_database_paths(installation)
-        installation = replace(
+        captured_installation, _ = capture_installation_identity(
             installation,
-            message_database_paths=tuple(paths[1:]),
+            cancel_event=cancel_event,
         )
+        installation = captured_installation
         service = LegacyKstConversationService(
             config,
             installation,

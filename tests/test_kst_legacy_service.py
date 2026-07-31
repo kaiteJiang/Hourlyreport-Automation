@@ -14,7 +14,8 @@ from modules.kst_local.service import KstServiceError
 def _create_live_database(path) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "CREATE TABLE DIALOGRECORD_VISITOR (recId TEXT, addTime TEXT)"
+            "CREATE TABLE DIALOGRECORD_VISITOR "
+            "(recId TEXT, addTime TEXT, recType INTEGER)"
         )
 
 
@@ -87,8 +88,9 @@ def seed_conversation(
 ):
     with sqlite3.connect(installation.message_database_paths[0]) as connection:
         connection.execute(
-            "INSERT INTO DIALOGRECORD_VISITOR (recId, addTime) VALUES (?, ?)",
-            (rec_id, "2026-07-29 09:10:01"),
+            "INSERT INTO DIALOGRECORD_VISITOR "
+            "(recId, addTime, recType) VALUES (?, ?, ?)",
+            (rec_id, "2026-07-29 09:10:01", 1),
         )
     with sqlite3.connect(installation.history_db) as connection:
         connection.execute(

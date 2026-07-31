@@ -11,6 +11,9 @@ from modules.kst_local.models import (
     KstInstallationLike,
     LegacyKstInstallation,
 )
+from modules.kst_local.legacy_db_reader import (
+    legacy_history_database_paths,
+)
 
 
 _SIDECAR_SUFFIXES = ("", "-wal", "-shm", "-journal")
@@ -41,13 +44,14 @@ def legacy_identity_database_paths(
 ) -> tuple[Path, ...]:
     _check_cancelled(cancel_event, deadline)
     company_dir = installation.history_db.parent
+    history_paths = legacy_history_database_paths(installation)
     current_paths: set[Path] = {
         path.resolve()
         for path in installation.message_database_paths
         if path.is_file()
     }
     try:
-        for path in company_dir.rglob("*_CS.pdb"):
+        for path in company_dir.rglob("*CS.pdb"):
             _check_cancelled(cancel_event, deadline)
             if path.is_file() and path.parent.name.endswith("-onlie"):
                 current_paths.add(path.resolve())
@@ -58,7 +62,7 @@ def legacy_identity_database_paths(
         ) from None
     _check_cancelled(cancel_event, deadline)
     return (
-        installation.history_db.resolve(),
+        *history_paths,
         *sorted(current_paths, key=lambda path: str(path).casefold()),
     )
 
@@ -151,13 +155,14 @@ def capture_installation_identity(
     deadline: float | None = None,
 ) -> tuple[KstInstallationLike, tuple[Any, ...]]:
     if isinstance(installation, LegacyKstInstallation):
+        history_paths = legacy_history_database_paths(installation)
         paths = legacy_identity_database_paths(
             installation,
             cancel_event=cancel_event,
             deadline=deadline,
         )
         family = installation.client_family
-        message_paths = tuple(paths[1:])
+        message_paths = tuple(paths[len(history_paths) :])
         captured_installation: KstInstallationLike = (
             replace(
                 installation,

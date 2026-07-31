@@ -54,7 +54,7 @@ def _create_history_database(path, *, columns=HISTORY_COLUMNS) -> None:
 def _create_message_database(
     path,
     *,
-    columns=("recId TEXT", "addTime TEXT"),
+    columns=("recId TEXT", "addTime TEXT", "recType INTEGER"),
 ) -> None:
     with closing(sqlite3.connect(path)) as connection:
         connection.execute(
@@ -68,8 +68,8 @@ def _insert_message(path, rec_id) -> None:
     with closing(sqlite3.connect(path)) as connection:
         connection.execute(
             "INSERT INTO DIALOGRECORD_VISITOR "
-            "(recId, addTime) VALUES (?, ?)",
-            (rec_id, "2026-07-29 09:10:01"),
+            "(recId, addTime, recType) VALUES (?, ?, ?)",
+            (rec_id, "2026-07-29 09:10:01", 1),
         )
         connection.commit()
 

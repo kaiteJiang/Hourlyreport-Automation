@@ -61,7 +61,7 @@ def should_warn_no_output(
     already_warned: bool,
 ) -> bool:
     return (
-        stage == "baidu"
+        stage not in {"", "done", "error"}
         and elapsed_seconds >= 45
         and not already_warned
     )

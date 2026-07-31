@@ -351,6 +351,7 @@ def _discover_company_identities(
     diagnostics: list[KstDiscoveryError],
 ) -> list[LegacyKstInstallation]:
     found: list[LegacyKstInstallation] = []
+    diagnostic_start = len(diagnostics)
     try:
         company_dirs = sorted(
             (path for path in db_root.iterdir() if path.is_dir()),
@@ -361,6 +362,7 @@ def _discover_company_identities(
             "旧版客户端数据库目录无法扫描",
             category="data_root",
         ) from exc
+    raise_identity_error = fail_closed and len(company_dirs) == 1
     for company_dir in company_dirs:
         if cancel_event is not None and cancel_event.is_set():
             raise KstDiscoveryError(
@@ -375,7 +377,7 @@ def _discover_company_identities(
                 "旧版快商通数据库结构不兼容",
                 category="database_incompatible",
             )
-            if fail_closed:
+            if raise_identity_error:
                 raise error
             diagnostics.append(error)
             continue
@@ -384,7 +386,7 @@ def _discover_company_identities(
                 sorted(
                     (
                         path.resolve()
-                        for path in company_dir.rglob("*_CS.pdb")
+                        for path in company_dir.rglob("*CS.pdb")
                         if path.is_file()
                         and path.parent.name.endswith("-onlie")
                     ),
@@ -396,7 +398,7 @@ def _discover_company_identities(
                 "旧版客户端对话数据库无法扫描",
                 category="data_root",
             )
-            if fail_closed:
+            if raise_identity_error:
                 raise error from exc
             diagnostics.append(error)
             continue
@@ -405,7 +407,7 @@ def _discover_company_identities(
                 "旧版快商通数据库结构不兼容",
                 category="database_incompatible",
             )
-            if fail_closed:
+            if raise_identity_error:
                 raise error
             diagnostics.append(error)
             continue
@@ -452,7 +454,7 @@ def _discover_company_identities(
                     str(exc),
                     category=exc.category,
                 ) from None
-            if fail_closed:
+            if raise_identity_error:
                 raise KstDiscoveryError(
                     str(exc),
                     category=exc.category,
@@ -465,7 +467,7 @@ def _discover_company_identities(
             )
             continue
         except KstDiscoveryError as exc:
-            if fail_closed:
+            if raise_identity_error:
                 raise
             diagnostics.append(exc)
             continue
@@ -475,6 +477,10 @@ def _discover_company_identities(
                 promotion_ids=frozenset(promotion_ids),
                 identity_fingerprint=fingerprint,
             )
+        )
+    if fail_closed and not found and len(diagnostics) > diagnostic_start:
+        raise most_specific_discovery_error(
+            diagnostics[diagnostic_start:]
         )
     return found
 

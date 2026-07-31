@@ -1726,6 +1726,13 @@ class MainWindow(QMainWindow):
             self.on_kst_api_status_changed
         )
         self.kst_api_manager.log_message.connect(self.append_log)
+        activity_message = getattr(
+            self.kst_api_manager,
+            "activity_message",
+            None,
+        )
+        if activity_message is not None:
+            activity_message.connect(self.append_log)
         self.update_manager = GitHubUpdateManager(self)
         self.update_manager.checking.connect(self.on_update_checking)
         self.update_manager.available.connect(self.on_update_available)
@@ -4183,9 +4190,23 @@ class MainWindow(QMainWindow):
             already_warned=self._task_output_warning_sent,
         ):
             return
-        self._task_output_warning_sent = True
-        self.progress_text.setText("百度 API 暂无新输出，任务仍在运行，可点击停止。")
-        self.append_log("[提示] 百度 API 已 45 秒没有新输出；任务仍在运行，停止按钮仍可使用。")
+        stage_names = {
+            "preflight": "运行前检查",
+            "login": "百度登录",
+            "baidu": "百度数据读取",
+            "kst": "快商通数据读取",
+            "merge": "数据合并",
+            "excel": "Excel 处理",
+        }
+        stage_name = stage_names.get(self._task_observed_stage, "当前步骤")
+        self._task_last_output_at = time.monotonic()
+        self.progress_text.setText(
+            f"{stage_name}暂无新输出，任务仍在运行，可点击停止。"
+        )
+        self.append_log(
+            f"[提示] {stage_name}已 45 秒没有新输出；"
+            "任务仍在运行，停止按钮仍可使用。"
+        )
 
     def on_task_finished(self, exit_code: int) -> None:
         self._task_output_watchdog.stop()

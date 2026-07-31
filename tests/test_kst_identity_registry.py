@@ -135,6 +135,33 @@ def test_required_endpoints_also_require_current_auth(
     ) is expected
 
 
+def test_required_endpoints_accept_database_fallback_without_visitor_info(
+    monkeypatch,
+    tmp_path,
+):
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={},
+        auth=KstAuthContext(
+            common_query={"compId": "1"},
+            headers={"X-Client": "desktop"},
+            endpoints={
+                "visitor_card": "https://example/card",
+                "tag_dictionary": "https://example/tags",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "parse_cached_log_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+
+    assert registry_module._required_endpoints_available(
+        installation(tmp_path, "id-a"),
+        "2026-07-28",
+    ) is True
+
+
 def registry_for(
     tmp_path,
     projects,

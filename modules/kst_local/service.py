@@ -111,6 +111,40 @@ class KstConversationService:
         promotion_map: dict[str, str],
     ) -> KstConversation:
         try:
+            endpoint_names = set(self._snapshot.auth.endpoints)
+            database_fallback = (
+                "visitor_info" not in endpoint_names
+                and {
+                    "visitor_card",
+                    "tag_dictionary",
+                }.issubset(endpoint_names)
+            )
+            if database_fallback:
+                start_time = candidate.start_time
+                visitor_messages = int(candidate.visitor_messages or 0)
+                promotion_id = candidate.promotion_id
+                if not start_time:
+                    raise ValueError("start time missing")
+                if not promotion_id:
+                    raise ValueError("promotion id missing")
+                if promotion_id not in promotion_map:
+                    raise ValueError(
+                        "promotion id outside project mapping"
+                    )
+                tags = tuple(
+                    tag_map.get(tag_id, tag_id)
+                    for tag_id in _tag_ids(candidate.tag_ids)
+                )
+                return KstConversation(
+                    rec_id=candidate.rec_id,
+                    start_time=start_time,
+                    promotion_id=promotion_id,
+                    visitor_messages=visitor_messages,
+                    tags=tags,
+                    sources=allowed[candidate.rec_id],
+                    keyword=candidate.keyword,
+                    bid_word=candidate.bid_word,
+                )
             visitor = self._client.load_visitor(candidate.rec_id)
             visitor_id = str(visitor.get("visitorId") or "")
             if not visitor_id:

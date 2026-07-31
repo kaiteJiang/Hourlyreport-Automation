@@ -32,7 +32,7 @@
 1. 查询 GitHub 上一次正式 Release 的版本号。
 2. 使用当天日期，并将上一次版本号最后一段加 `1`。
 3. 同步更新 `gui/version.py` 中的 `CURRENT_VERSION`。
-4. 运行统一发布构建；裸 `hourlyreport_automation.exe` 只进入 `build/release_<version>_staging/`，不得留在 `dist/`。
+4. 运行统一发布构建；裸 `hourlyreport_automation.exe` 生成到 `build/release_<version>_staging/` 后同步覆盖开发根目录供本机运行，但不得留在 `dist/`。
 5. 运行基础测试，不通过则停止发布。
 6. 生成包含默认配置但不含真实凭据的标准安装器，以及只含程序文件的在线更新包：
 

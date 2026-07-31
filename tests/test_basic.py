@@ -6710,6 +6710,40 @@ def test_baidu_api_zero_fills_all_requested_accounts_when_rows_empty_and_summary
     assert report["diagnostics"]["zero_filled_count"] == 3
 
 
+def test_baidu_api_treats_successful_empty_result_without_summary_as_zero(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    report = fetch_baidu_api_daily(
+        config,
+        tmp_path,
+        logging.getLogger("api-zero-fill-empty-summary"),
+        "2026-07-16",
+        token_provider=lambda *_args, **_kwargs: (
+            "header.payload.signature",
+            {},
+        ),
+        transport=lambda *_args: _api_success_response(
+            "2026-07-16",
+            rows=[],
+            summary={},
+        ),
+        commit_standard_report=False,
+    )
+
+    assert list(report["accounts"]) == [
+        "银康01",
+        "银康银屑02",
+        "银康03",
+    ]
+    assert all(
+        row["synthetic_zero"] is True
+        for row in report["accounts"].values()
+    )
+    assert report["diagnostics"]["zero_filled_count"] == 3
+
+
 @pytest.mark.parametrize(
     ("summary", "expected_error"),
     [
@@ -12673,7 +12707,10 @@ def test_desktop_gui_task_runner_infers_progress_stages():
     assert infer_stage("[实际来源] API") == "baidu"
     assert should_warn_no_output("baidu", 45.0, already_warned=False) is True
     assert should_warn_no_output("baidu", 44.9, already_warned=False) is False
-    assert should_warn_no_output("kst", 90.0, already_warned=False) is False
+    assert should_warn_no_output("kst", 45.0, already_warned=False) is True
+    assert should_warn_no_output("excel", 45.0, already_warned=False) is True
+    assert should_warn_no_output("done", 90.0, already_warned=False) is False
+    assert should_warn_no_output("error", 90.0, already_warned=False) is False
     assert should_warn_no_output("baidu", 90.0, already_warned=True) is False
     assert infer_pet_event("已填写百度登录字段：username") == "login"
     assert infer_pet_event("顶部用户名已匹配项目账号") == "login_ready"

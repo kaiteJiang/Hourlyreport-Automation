@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import inspect
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -36,6 +37,10 @@ _TYPED_FAILURE_MESSAGES = {
     "port_in_use": "商务通本地 API 端口被占用",
     "authentication": "商务通本地 API 认证配置无效",
 }
+_SAFE_LEGACY_SCHEMA_DETAIL = re.compile(
+    r"^老版快商通(?:历史库|消息库)缺少必要(?:数据表|字段)："
+    r"[A-Za-z0-9_/、]+$"
+)
 
 
 class _RegistryHealthFailure(RuntimeError):
@@ -71,9 +76,15 @@ def _health_failure(
 ) -> BaseException:
     category = str(health.get("error_category") or "").strip()
     if category in _TYPED_FAILURE_MESSAGES:
+        detail = str(health.get("error_detail") or "").strip()
+        if (
+            category != "database_incompatible"
+            or _SAFE_LEGACY_SCHEMA_DETAIL.fullmatch(detail) is None
+        ):
+            detail = _TYPED_FAILURE_MESSAGES[category]
         return _RegistryHealthFailure(
             category,
-            _TYPED_FAILURE_MESSAGES[category],
+            detail,
         )
     return RuntimeError(fallback)
 
@@ -151,6 +162,7 @@ def probe_kst_health(
 class KstApiManager(QObject):
     status_changed = Signal(bool, str)
     log_message = Signal(str)
+    activity_message = Signal(str)
     _retry_requested = Signal(int, int)
     _worker_finished = Signal(int, object)
     _status_requested = Signal(int, bool, str)
@@ -545,15 +557,21 @@ class KstApiManager(QObject):
     def _safe_failure(
         error: BaseException | str,
     ) -> tuple[str, str]:
+        text = str(error or "").strip()
         typed_category = str(
             getattr(error, "category", "")
         ).strip()
         if typed_category in _TYPED_FAILURE_MESSAGES:
+            detail = _TYPED_FAILURE_MESSAGES[typed_category]
+            if (
+                typed_category == "database_incompatible"
+                and _SAFE_LEGACY_SCHEMA_DETAIL.fullmatch(text) is not None
+            ):
+                detail = text
             return (
                 typed_category,
-                _TYPED_FAILURE_MESSAGES[typed_category],
+                detail,
             )
-        text = str(error or "").strip()
         lowered = text.casefold()
         if any(
             credential_key in lowered
@@ -634,8 +652,12 @@ class KstApiManager(QObject):
             self._detail = detail
             delay_ms = self._next_failure_delay_locked()
         self._queue_status(generation, False, detail)
+        delay_seconds = max(1, (delay_ms + 999) // 1000)
         if should_log:
             self._emit_log(detail)
+        self.activity_message.emit(
+            f"[KST] {detail}；{delay_seconds} 秒后自动重试"
+        )
         return delay_ms
 
     def _refresh_owned_registry(

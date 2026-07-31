@@ -15,6 +15,44 @@ def test_desktop_build_uses_versioned_staging_directory(tmp_path):
     ) == tmp_path / "build" / "release_2026.7.27.114_staging"
 
 
+def test_desktop_build_updates_root_launcher_after_success(
+    tmp_path,
+    monkeypatch,
+):
+    import tools.build_desktop_exe as builder
+
+    (tmp_path / "gui").mkdir()
+    (tmp_path / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.31.118"\n',
+        encoding="utf-8",
+    )
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    spec = tmp_path / "tools" / "hourlyreport_automation.spec"
+    spec.parent.mkdir()
+    spec.write_text("# test spec\n", encoding="utf-8")
+    (tmp_path / "hourlyreport_automation.exe").write_bytes(b"old")
+
+    def fake_run(command, cwd):
+        target = Path(command[command.index("--distpath") + 1])
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "hourlyreport_automation.exe").write_bytes(b"new")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(builder.subprocess, "run", fake_run)
+
+    assert builder.build_desktop_exe(tmp_path) == 0
+    assert (tmp_path / "hourlyreport_automation.exe").read_bytes() == b"new"
+    manifest = json.loads(
+        (tmp_path / "hourlyreport_automation.build.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert manifest["version"] == "2026.7.31.118"
+    assert manifest["executable"] == "hourlyreport_automation.exe"
+
+
 def test_publish_release_replaces_dist_with_only_two_assets(
     tmp_path,
     monkeypatch,

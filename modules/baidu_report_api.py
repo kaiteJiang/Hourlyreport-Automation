@@ -271,11 +271,26 @@ def _parse_api_response(
             **metrics,
         }
 
-    summary_metrics = {
-        "impression": _number(summary.get("impression"), integer=True),
-        "click": _number(summary.get("click"), integer=True),
-        "cost": _number(summary.get("cost")),
-    }
+    empty_success = (
+        header.get("status") == 0
+        and str(header.get("desc") or "").lower() == "success"
+        and not failures
+        and wrapper.get("totalRowCount") in (0, "0")
+        and not rows
+        and not summary
+    )
+    summary_metrics = (
+        {"impression": 0, "click": 0, "cost": 0.0}
+        if empty_success
+        else {
+            "impression": _number(
+                summary.get("impression"),
+                integer=True,
+            ),
+            "click": _number(summary.get("click"), integer=True),
+            "cost": _number(summary.get("cost")),
+        }
+    )
     summary_complete = all(value is not None for value in summary_metrics.values())
     summary_matches_rows = False
     if summary_complete:

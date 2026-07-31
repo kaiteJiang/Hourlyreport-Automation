@@ -188,28 +188,32 @@ def test_retry_timer_is_single_shot_with_bounded_backoff(qapp, tmp_path):
         manager.stop()
 
 
-def test_identical_start_failure_logs_once_until_reminder(qapp, tmp_path):
-    now = [0.0]
+def test_identical_start_failure_logs_once_and_reports_each_retry_delay(
+    qapp,
+    tmp_path,
+):
     messages = []
+    activities = []
     manager, attempts = failing_manager(
         tmp_path,
         ["客户端未运行"],
-        monotonic=lambda: now[0],
     )
     manager.log_message.connect(messages.append)
+    manager.activity_message.connect(activities.append)
 
     manager.start()
     try:
         wait_for_attempts(attempts, 1)
-        assert wait_until(lambda: len(messages) == 1)
+        assert wait_until(lambda: len(messages) == 1 and len(activities) == 1)
         trigger_attempts(manager, attempts, 3)
-        QApplication.processEvents()
+        assert wait_until(lambda: len(activities) == 4)
         assert messages == ["客户端未运行"]
-
-        now[0] = 301.0
-        trigger_attempts(manager, attempts, 1)
-        assert wait_until(lambda: len(messages) == 2)
-        assert messages == ["客户端未运行", "客户端未运行"]
+        assert activities == [
+            "[KST] 客户端未运行；5 秒后自动重试",
+            "[KST] 客户端未运行；15 秒后自动重试",
+            "[KST] 客户端未运行；30 秒后自动重试",
+            "[KST] 客户端未运行；60 秒后自动重试",
+        ]
     finally:
         manager.stop()
 
@@ -229,6 +233,48 @@ def test_error_change_logs_immediately(qapp, tmp_path):
         trigger_attempts(manager, attempts, 1)
         assert wait_until(lambda: len(messages) == 2)
         assert messages == ["客户端未运行", "数据库结构不兼容"]
+    finally:
+        manager.stop()
+
+
+def test_legacy_schema_failure_keeps_safe_specific_problem_in_live_log(
+    qapp,
+    tmp_path,
+):
+    messages = []
+    activities = []
+    attempts = []
+
+    class OldSchemaRegistry:
+        def __init__(self, *_args):
+            pass
+
+        def refresh(self):
+            attempts.append(1)
+            raise KstLegacyDatabaseError(
+                "老版快商通历史库缺少必要字段：visitorSendNum",
+                category="database_incompatible",
+            )
+
+    manager = KstApiManager(
+        tmp_path,
+        probe=lambda *_: False,
+        registry_factory=OldSchemaRegistry,
+    )
+    manager.log_message.connect(messages.append)
+    manager.activity_message.connect(activities.append)
+
+    manager.start()
+    try:
+        wait_for_attempts(attempts, 1)
+        assert wait_until(lambda: len(messages) == 1)
+        assert messages == [
+            "老版快商通历史库缺少必要字段：visitorSendNum"
+        ]
+        assert activities == [
+            "[KST] 老版快商通历史库缺少必要字段：visitorSendNum；"
+            "5 秒后自动重试"
+        ]
     finally:
         manager.stop()
 

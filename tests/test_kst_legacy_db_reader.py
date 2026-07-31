@@ -22,7 +22,8 @@ from modules.kst_local.models import LegacyKstInstallation
 def _create_live_database(path) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "CREATE TABLE DIALOGRECORD_VISITOR (recId TEXT, addTime TEXT)"
+            "CREATE TABLE DIALOGRECORD_VISITOR "
+            "(recId TEXT, addTime TEXT, recType INTEGER)"
         )
 
 
@@ -36,13 +37,15 @@ def _create_history_database(path) -> None:
                 diaStartTime TEXT,
                 visitorSendNum INTEGER,
                 visitorCustomField TEXT,
+                info TEXT,
                 keyword TEXT,
                 bidWord TEXT,
                 talkGrade TEXT,
                 dialogClassification TEXT,
                 classifyTag TEXT,
                 cusTypeTag TEXT,
-                aiTags TEXT
+                aiTags TEXT,
+                sourceType INTEGER
             )
             """
         )
@@ -66,11 +69,18 @@ def legacy_installation(tmp_path):
     )
 
 
-def insert_live_message(path, *, rec_id: str, add_time: str) -> None:
+def insert_live_message(
+    path,
+    *,
+    rec_id: str,
+    add_time: str,
+    rec_type: int = 1,
+) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "INSERT INTO DIALOGRECORD_VISITOR (recId, addTime) VALUES (?, ?)",
-            (rec_id, add_time),
+            "INSERT INTO DIALOGRECORD_VISITOR "
+            "(recId, addTime, recType) VALUES (?, ?, ?)",
+            (rec_id, add_time, rec_type),
         )
 
 
@@ -84,16 +94,19 @@ def insert_history(
     tags: str,
     dia_start: str = "",
     visitor_custom_field: str | None = None,
+    info: str = "",
+    source_type: int | None = None,
 ) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute(
             """
             INSERT INTO OC_HDVISITORINFO (
                 recId, curEnterTime, diaStartTime, visitorSendNum,
-                visitorCustomField, keyword, bidWord, talkGrade,
-                dialogClassification, classifyTag, cusTypeTag, aiTags
+                visitorCustomField, info, keyword, bidWord, talkGrade,
+                dialogClassification, classifyTag, cusTypeTag, aiTags,
+                sourceType
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 rec_id,
@@ -105,6 +118,7 @@ def insert_history(
                     if visitor_custom_field is not None
                     else f"推广 ID：{promotion_id}"
                 ),
+                info,
                 "",
                 "",
                 tags,
@@ -112,6 +126,7 @@ def insert_history(
                 "",
                 "",
                 "",
+                source_type,
             ),
         )
 
@@ -146,6 +161,19 @@ def test_history_only_record_is_not_counted(legacy_installation):
         promotion_id="10001",
         tags="有效-三句话",
     )
+    assert read_legacy_conversations(legacy_installation, "2026-07-29") == []
+
+
+def test_system_only_live_record_does_not_require_history_details(
+    legacy_installation,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="system-only",
+        add_time="2026-07-29 09:10:01",
+        rec_type=4,
+    )
+
     assert read_legacy_conversations(legacy_installation, "2026-07-29") == []
 
 
@@ -225,6 +253,54 @@ def test_missing_promotion_id_fails_closed(legacy_installation):
         "2026-07-29",
         category="identity_mapping",
     )
+
+
+def test_legacy_promotion_id_falls_back_to_info_field(
+    legacy_installation,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="info-promotion",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        legacy_installation.history_db,
+        rec_id="info-promotion",
+        start="2026-07-29 09:10:00",
+        messages=1,
+        promotion_id="",
+        tags="",
+        visitor_custom_field='{"source":"legacy"}',
+        info="推广 ID：10001",
+    )
+
+    rows = read_legacy_conversations(legacy_installation, "2026-07-29")
+
+    assert [(row.rec_id, row.promotion_id) for row in rows] == [
+        ("info-promotion", "10001")
+    ]
+
+
+def test_direct_source_without_promotion_id_is_not_a_baidu_conversation(
+    legacy_installation,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="direct-source",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        legacy_installation.history_db,
+        rec_id="direct-source",
+        start="2026-07-29 09:10:00",
+        messages=2,
+        promotion_id="",
+        tags="",
+        visitor_custom_field="{}",
+        source_type=7,
+    )
+
+    assert read_legacy_conversations(legacy_installation, "2026-07-29") == []
 
 
 @pytest.mark.parametrize(
@@ -389,6 +465,62 @@ def test_promotion_ids_use_only_live_authorized_records(legacy_installation):
     assert {path: path.read_bytes() for path in paths} == before
 
 
+def test_promotion_id_read_ignores_not_yet_synced_live_conversation(
+    legacy_installation,
+):
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="complete",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        legacy_installation.history_db,
+        rec_id="complete",
+        start="2026-07-29 09:10:00",
+        messages=1,
+        promotion_id="10001",
+        tags="",
+    )
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="still-syncing",
+        add_time="2026-07-31 17:10:01",
+    )
+
+    assert read_legacy_promotion_ids(legacy_installation) == {"10001"}
+
+
+def test_target_month_archive_supplies_history_when_current_file_is_empty(
+    legacy_installation,
+):
+    archive = (
+        legacy_installation.history_db.parent
+        / "his"
+        / "2026-07_HIS.cdb"
+    )
+    archive.parent.mkdir()
+    _create_history_database(archive)
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="archived",
+        add_time="2026-07-29 09:10:01",
+    )
+    insert_history(
+        archive,
+        rec_id="archived",
+        start="2026-07-29 09:10:00",
+        messages=2,
+        promotion_id="10001",
+        tags="有效-三句话",
+    )
+
+    rows = read_legacy_conversations(legacy_installation, "2026-07-29")
+
+    assert [(row.rec_id, row.visitor_messages) for row in rows] == [
+        ("archived", 2)
+    ]
+
+
 def test_complete_empty_schema_is_not_a_ready_legacy_identity(
     legacy_installation,
 ):
@@ -522,6 +654,93 @@ def test_history_fallback_fields_and_tags_are_normalized(legacy_installation):
     assert (row.start_time, row.tags) == (
         "2026-07-29 09:10:00",
         ("有效-三句话", "转潜-有效"),
+    )
+
+
+def test_legacy_history_without_optional_columns_remains_readable(
+    legacy_installation,
+):
+    history_db = legacy_installation.history_db
+    with sqlite3.connect(history_db) as connection:
+        connection.execute("DROP TABLE OC_HDVISITORINFO")
+        connection.execute(
+            """
+            CREATE TABLE OC_HDVISITORINFO (
+                recId TEXT,
+                curEnterTime TEXT,
+                visitorSendNum INTEGER,
+                visitorCustomField TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO OC_HDVISITORINFO (
+                recId, curEnterTime, visitorSendNum, visitorCustomField
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                "old-schema",
+                "2026-07-29 09:10:00",
+                2,
+                "推广 ID：10001",
+            ),
+        )
+    insert_live_message(
+        legacy_installation.message_database_paths[0],
+        rec_id="old-schema",
+        add_time="2026-07-29 09:10:01",
+    )
+
+    rows = read_legacy_conversations(legacy_installation, "2026-07-29")
+
+    assert len(rows) == 1
+    assert rows[0].rec_id == "old-schema"
+    assert rows[0].tags == ()
+    assert rows[0].keyword == ""
+    assert rows[0].bid_word == ""
+
+
+def test_legacy_history_missing_required_column_reports_the_field(
+    legacy_installation,
+):
+    history_db = legacy_installation.history_db
+    with sqlite3.connect(history_db) as connection:
+        connection.execute("DROP TABLE OC_HDVISITORINFO")
+        connection.execute(
+            """
+            CREATE TABLE OC_HDVISITORINFO (
+                recId TEXT,
+                curEnterTime TEXT,
+                visitorCustomField TEXT
+            )
+            """
+        )
+
+    with pytest.raises(KstLegacyDatabaseError) as captured:
+        validate_legacy_read_capability(legacy_installation)
+
+    assert captured.value.category == "database_incompatible"
+    assert str(captured.value) == "老版快商通历史库缺少必要字段：visitorSendNum"
+
+
+def test_legacy_message_database_missing_required_column_reports_the_field(
+    legacy_installation,
+):
+    live_db = legacy_installation.message_database_paths[0]
+    with sqlite3.connect(live_db) as connection:
+        connection.execute("DROP TABLE DIALOGRECORD_VISITOR")
+        connection.execute(
+            "CREATE TABLE DIALOGRECORD_VISITOR (recId TEXT)"
+        )
+
+    with pytest.raises(KstLegacyDatabaseError) as captured:
+        validate_legacy_read_capability(legacy_installation)
+
+    assert captured.value.category == "database_incompatible"
+    assert str(captured.value) == (
+        "老版快商通消息库缺少必要字段：addTime、recType"
     )
 
 

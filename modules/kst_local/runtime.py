@@ -26,7 +26,7 @@ class KstLiveRuntime:
 
     def health(self) -> dict[str, Any]:
         auth = self.snapshot.auth.safe_diagnostics()
-        required = {"visitor_info", "visitor_card", "tag_dictionary"}
+        required = {"visitor_card", "tag_dictionary"}
         endpoints = set(auth["endpoint_names"])
         required_endpoints_available = (
             required.issubset(endpoints)
