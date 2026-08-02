@@ -8,6 +8,7 @@
     "engine": "openpyxl"
   },
   "kst": {
+    "site_id": "223699",
     "export_dir": "D:\\商务通数据\\沈阳白",
     "auto_pick_latest": true,
     "max_file_age_hours": 2

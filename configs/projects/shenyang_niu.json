@@ -8,6 +8,7 @@
     "engine": "openpyxl"
   },
   "kst": {
+    "site_id": "981765",
     "export_dir": "D:\\商务通数据\\沈阳牛",
     "auto_pick_latest": true,
     "max_file_age_hours": 2
@@ -31,24 +32,42 @@
       "accounts": [
         {
           "standard_name": "沈阳中亚01",
-          "baidu_names": ["沈阳中亚银屑病1"],
+          "baidu_names": [
+            "沈阳中亚银屑病1"
+          ],
           "excel_name": "沈阳中亚01",
-          "kst_ids": ["37084684"],
-          "kst_names": ["沈阳中亚银屑病1"]
+          "kst_ids": [
+            "37084684"
+          ],
+          "kst_names": [
+            "沈阳中亚银屑病1"
+          ]
         },
         {
           "standard_name": "沈阳中亚02",
-          "baidu_names": ["沈阳中亚银屑病2"],
+          "baidu_names": [
+            "沈阳中亚银屑病2"
+          ],
           "excel_name": "沈阳中亚02",
-          "kst_ids": ["37084945"],
-          "kst_names": ["沈阳中亚银屑病2"]
+          "kst_ids": [
+            "37084945"
+          ],
+          "kst_names": [
+            "沈阳中亚银屑病2"
+          ]
         },
         {
           "standard_name": "沈阳中亚03",
-          "baidu_names": ["沈阳中亚银屑病3"],
+          "baidu_names": [
+            "沈阳中亚银屑病3"
+          ],
           "excel_name": "沈阳中亚03",
-          "kst_ids": ["37085087"],
-          "kst_names": ["沈阳中亚银屑病3"]
+          "kst_ids": [
+            "37085087"
+          ],
+          "kst_names": [
+            "沈阳中亚银屑病3"
+          ]
         }
       ]
     },
@@ -60,24 +79,42 @@
       "accounts": [
         {
           "standard_name": "沈阳银康01",
-          "baidu_names": ["沈阳银康银屑病1"],
+          "baidu_names": [
+            "沈阳银康银屑病1"
+          ],
           "excel_name": "沈阳银康01",
-          "kst_ids": ["47190166"],
-          "kst_names": ["沈阳银康银屑病1"]
+          "kst_ids": [
+            "47190166"
+          ],
+          "kst_names": [
+            "沈阳银康银屑病1"
+          ]
         },
         {
           "standard_name": "沈阳银康02",
-          "baidu_names": ["沈阳银康银屑病2"],
+          "baidu_names": [
+            "沈阳银康银屑病2"
+          ],
           "excel_name": "沈阳银康02",
-          "kst_ids": ["47190222"],
-          "kst_names": ["沈阳银康银屑病2"]
+          "kst_ids": [
+            "47190222"
+          ],
+          "kst_names": [
+            "沈阳银康银屑病2"
+          ]
         },
         {
           "standard_name": "沈阳银康03",
-          "baidu_names": ["沈阳银康银屑病3"],
+          "baidu_names": [
+            "沈阳银康银屑病3"
+          ],
           "excel_name": "沈阳银康03",
-          "kst_ids": ["47190275"],
-          "kst_names": ["沈阳银康银屑病3"]
+          "kst_ids": [
+            "47190275"
+          ],
+          "kst_names": [
+            "沈阳银康银屑病3"
+          ]
         }
       ]
     }
@@ -96,28 +133,50 @@
   "accounts": [
     {
       "standard_name": "沈阳中亚02",
-      "baidu_names": ["沈阳中亚银屑病2"],
+      "baidu_names": [
+        "沈阳中亚银屑病2"
+      ],
       "excel_name": "沈阳中亚02",
-      "kst_ids": ["37084945"],
-      "kst_names": ["沈阳中亚银屑病2"]
+      "kst_ids": [
+        "37084945"
+      ],
+      "kst_names": [
+        "沈阳中亚银屑病2"
+      ]
     },
     {
       "standard_name": "沈阳银康01",
-      "baidu_names": ["沈阳银康银屑病1"],
+      "baidu_names": [
+        "沈阳银康银屑病1"
+      ],
       "excel_name": "沈阳银康01",
-      "kst_ids": ["47190166"],
-      "kst_names": ["沈阳银康银屑病1"]
+      "kst_ids": [
+        "47190166"
+      ],
+      "kst_names": [
+        "沈阳银康银屑病1"
+      ]
     },
     {
       "standard_name": "沈阳中亚01",
-      "baidu_names": ["沈阳中亚银屑病1"],
+      "baidu_names": [
+        "沈阳中亚银屑病1"
+      ],
       "excel_name": "沈阳中亚01",
-      "kst_ids": ["37084684"],
-      "kst_names": ["沈阳中亚银屑病1"]
+      "kst_ids": [
+        "37084684"
+      ],
+      "kst_names": [
+        "沈阳中亚银屑病1"
+      ]
     }
   ],
   "hourly": {
-    "periods": ["11点", "15点", "18点"]
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
   },
   "daily": {
     "write_fields": [

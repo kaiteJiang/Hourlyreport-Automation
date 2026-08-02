@@ -113,11 +113,11 @@ class KstConversationService:
         try:
             endpoint_names = set(self._snapshot.auth.endpoints)
             database_fallback = (
-                "visitor_info" not in endpoint_names
-                and {
+                not {
+                    "visitor_info",
                     "visitor_card",
-                    "tag_dictionary",
                 }.issubset(endpoint_names)
+                and "tag_dictionary" in endpoint_names
             )
             if database_fallback:
                 start_time = candidate.start_time

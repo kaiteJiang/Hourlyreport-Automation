@@ -15541,6 +15541,7 @@ def test_shenyang_bai_config_has_verified_dual_source_mappings_and_example_profi
     root = Path(__file__).resolve().parents[1]
     project = load_project_config(root, "shenyang_bai")
     sources = project["baidu_sources"]
+    assert project["kst"]["site_id"] == "223699"
 
     assert [source["source_id"] for source in sources] == [
         "shenyang_bai_source_a",

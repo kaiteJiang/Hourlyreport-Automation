@@ -165,6 +165,20 @@ def _candidate_roots() -> Iterable[Path]:
     yield Path("D:/Program Files/KuaishangSoftx64/OnlineWebCSNew")
 
 
+def _electron_local_app_data(data_root: Path | None) -> Path | None:
+    """Return an Electron local-app-data parent, ignoring a legacy data root."""
+    if data_root is None:
+        return None
+    resolved = data_root.expanduser().resolve()
+    if resolved.name.casefold() == "onlinewebcsnew":
+        return resolved.parent
+    if (resolved / "OnlineWebCSNew").is_dir():
+        return resolved
+    if (resolved / "db").is_dir() and (resolved / "logs").is_dir():
+        return None
+    return resolved
+
+
 def _validate_root(root: Path) -> tuple[Path, Path, Path, str]:
     resolved = root.expanduser().resolve()
     package_path = resolved / "resources" / "app" / "package.json"
@@ -423,14 +437,11 @@ def discover_all_installations(
     electron_explicit_root = (
         None if is_explicit_legacy_root else configured_root
     )
-    electron_data_root = settings.data_root
-    if is_explicit_legacy_root:
-        electron_data_root = None
-    if (
-        electron_data_root is not None
-        and electron_data_root.name.casefold() == "onlinewebcsnew"
-    ):
-        electron_data_root = electron_data_root.parent
+    electron_data_root = (
+        None
+        if is_explicit_legacy_root
+        else _electron_local_app_data(settings.data_root)
+    )
     legacy_explicit_root = configured_root if is_explicit_legacy_root else None
     installations: list[KstInstallationLike] = []
     discovery_errors: list[KstDiscoveryError] = []

@@ -8,6 +8,7 @@
     "engine": "openpyxl"
   },
   "kst": {
+    "site_id": "202668",
     "export_dir": "D:\\商务通数据\\长沙牛",
     "auto_pick_latest": true,
     "max_file_age_hours": 2
@@ -26,28 +27,50 @@
   "accounts": [
     {
       "standard_name": "竞网CS博润241209",
-      "baidu_names": ["竞网CS博润241209"],
+      "baidu_names": [
+        "竞网CS博润241209"
+      ],
       "excel_name": "竞网CS博润241209",
-      "kst_ids": ["61561000"],
-      "kst_names": ["竞网CS博润241209"]
+      "kst_ids": [
+        "61561000"
+      ],
+      "kst_names": [
+        "竞网CS博润241209"
+      ]
     },
     {
       "standard_name": "竞网CS博润240304",
-      "baidu_names": ["竞网CS博润240304"],
+      "baidu_names": [
+        "竞网CS博润240304"
+      ],
       "excel_name": "竞网CS博润240304",
-      "kst_ids": ["53559272"],
-      "kst_names": ["竞网CS博润240304"]
+      "kst_ids": [
+        "53559272"
+      ],
+      "kst_names": [
+        "竞网CS博润240304"
+      ]
     },
     {
       "standard_name": "竞网CS博润251218",
-      "baidu_names": ["竞网CS博润251218"],
+      "baidu_names": [
+        "竞网CS博润251218"
+      ],
       "excel_name": "竞网CS博润251218",
-      "kst_ids": ["77609531"],
-      "kst_names": ["竞网CS博润251218"]
+      "kst_ids": [
+        "77609531"
+      ],
+      "kst_names": [
+        "竞网CS博润251218"
+      ]
     }
   ],
   "hourly": {
-    "periods": ["11点", "15点", "18点"]
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
   },
   "daily": {
     "write_fields": [

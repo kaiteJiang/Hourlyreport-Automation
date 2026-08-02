@@ -13,6 +13,8 @@ from modules.kst_local.identity_registry import (
     KstIdentityMappingError,
     KstIdentityRegistry,
     build_project_promotion_index,
+    build_project_site_index,
+    installation_site_id,
 )
 from modules.kst_local.models import (
     AutomaticSourceSnapshot,
@@ -22,7 +24,7 @@ from modules.kst_local.models import (
 )
 
 
-def project(project_id, promotion_ids):
+def project(project_id, promotion_ids, *, site_id=None):
     return {
         "project_id": project_id,
         "project_name": project_id,
@@ -32,7 +34,7 @@ def project(project_id, promotion_ids):
                 "kst_ids": list(promotion_ids),
             }
         ],
-        "kst": {},
+        "kst": ({"site_id": site_id} if site_id else {}),
     }
 
 
@@ -160,6 +162,62 @@ def test_required_endpoints_accept_database_fallback_without_visitor_info(
         installation(tmp_path, "id-a"),
         "2026-07-28",
     ) is True
+
+
+def test_required_endpoints_accept_database_fallback_without_visitor_card(
+    monkeypatch,
+    tmp_path,
+):
+    snapshot = AutomaticSourceSnapshot(
+        sources_by_rec_id={},
+        auth=KstAuthContext(
+            common_query={"compId": "1"},
+            headers={"X-Client": "desktop"},
+            endpoints={
+                "visitor_info": "https://example/visitor",
+                "tag_dictionary": "https://example/tags",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "parse_cached_log_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+
+    assert registry_module._required_endpoints_available(
+        installation(tmp_path, "id-a"),
+        "2026-07-28",
+    ) is True
+
+
+def test_installation_site_id_uses_numeric_identity_prefix(tmp_path):
+    assert installation_site_id(installation(tmp_path, "733875_1269870")) == "733875"
+    assert installation_site_id(installation(tmp_path, "identity-without-site")) == ""
+
+
+def test_project_site_index_rejects_duplicate_site_ids():
+    with pytest.raises(KstIdentityMappingError, match="站点 ID"):
+        build_project_site_index(
+            [
+                project("a", ["10001"], site_id="733875"),
+                project("b", ["20001"], site_id="733875"),
+            ]
+        )
+
+
+def test_registry_binds_configured_site_id_when_promotion_ids_are_unavailable(
+    tmp_path,
+):
+    registry = registry_for(
+        tmp_path,
+        projects=[project("a", ["10001"], site_id="733875")],
+        identities={"733875_1269870": set()},
+    )
+
+    registry.refresh()
+
+    assert registry.installation_for("a").identity == "733875_1269870"
 
 
 def registry_for(

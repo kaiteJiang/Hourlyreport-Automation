@@ -387,7 +387,22 @@ def test_service_uses_cached_log_tags_when_live_tag_endpoint_is_unavailable():
     assert conversations[0].tags == ("有效-三句", "转潜-有效")
 
 
-def test_service_uses_readonly_database_fields_when_visitor_endpoint_is_absent():
+@pytest.mark.parametrize(
+    "endpoints",
+    [
+        {
+            "visitor_card": "https://example/card",
+            "tag_dictionary": "https://example/tags",
+        },
+        {
+            "visitor_info": "https://example/visitor",
+            "tag_dictionary": "https://example/tags",
+        },
+    ],
+)
+def test_service_uses_readonly_database_fields_when_visitor_endpoint_is_absent(
+    endpoints,
+):
     class DatabaseOnlyClient(FakeClient):
         def load_visitor(self, rec_id):
             raise AssertionError("visitor endpoint must not be called")
@@ -402,10 +417,7 @@ def test_service_uses_readonly_database_fields_when_visitor_endpoint_is_absent()
         auth=KstAuthContext(
             common_query={"compId": "1"},
             headers={"X-Client": "desktop"},
-            endpoints={
-                "visitor_card": "https://example/card",
-                "tag_dictionary": "https://example/tags",
-            },
+            endpoints=endpoints,
         ),
         tag_dictionary={
             "11": "有效-三句",

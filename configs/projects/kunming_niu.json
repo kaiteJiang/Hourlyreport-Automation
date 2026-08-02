@@ -8,6 +8,7 @@
     "engine": "openpyxl"
   },
   "kst": {
+    "site_id": "733875",
     "export_dir": "D:\\商务通数据\\昆明牛",
     "auto_pick_latest": true,
     "max_file_age_hours": 2,
@@ -30,28 +31,51 @@
   "accounts": [
     {
       "standard_name": "银康01",
-      "baidu_names": ["银康01"],
+      "baidu_names": [
+        "银康01"
+      ],
       "excel_name": "银康01",
-      "kst_ids": ["72828178"],
-      "kst_names": ["银康01"]
+      "kst_ids": [
+        "72828178"
+      ],
+      "kst_names": [
+        "银康01"
+      ]
     },
     {
       "standard_name": "银康银屑02",
-      "baidu_names": ["银康银屑02"],
+      "baidu_names": [
+        "银康银屑02"
+      ],
       "excel_name": "银康银屑02",
-      "kst_ids": ["72828179"],
-      "kst_names": ["银康银屑02"]
+      "kst_ids": [
+        "72828179"
+      ],
+      "kst_names": [
+        "银康银屑02"
+      ]
     },
     {
       "standard_name": "银康03",
-      "baidu_names": ["baidu-银康03", "银康03"],
+      "baidu_names": [
+        "baidu-银康03",
+        "银康03"
+      ],
       "excel_name": "银康03",
-      "kst_ids": ["81509165"],
-      "kst_names": ["银康03"]
+      "kst_ids": [
+        "81509165"
+      ],
+      "kst_names": [
+        "银康03"
+      ]
     }
   ],
   "hourly": {
-    "periods": ["11点", "15点", "18点"]
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
   },
   "daily": {
     "write_fields": [

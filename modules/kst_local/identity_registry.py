@@ -158,6 +158,43 @@ def build_project_promotion_index(
     return index
 
 
+_SITE_ID_PATTERN = re.compile(r"^(\d+)_")
+
+
+def installation_site_id(installation: KstInstallationLike) -> str:
+    """从快商通身份串提取唯一站点 ID。"""
+    identity = str(getattr(installation, "identity", "") or "").strip()
+    match = _SITE_ID_PATTERN.match(identity)
+    return match.group(1) if match else ""
+
+
+def _project_site_id(project: dict[str, Any]) -> str:
+    kst_config = project.get("kst") or {}
+    if not isinstance(kst_config, dict):
+        return ""
+    site_id = str(kst_config.get("site_id") or "").strip()
+    return site_id if site_id.isdigit() else ""
+
+
+def build_project_site_index(
+    projects: list[dict[str, Any]],
+) -> dict[str, str]:
+    """构建站点 ID 到项目的唯一映射，并拒绝重复配置。"""
+    index: dict[str, str] = {}
+    for project in projects:
+        project_id = str(project.get("project_id") or "").strip()
+        site_id = _project_site_id(project)
+        if not project_id or not site_id:
+            continue
+        existing = index.get(site_id)
+        if existing is not None and existing != project_id:
+            raise KstIdentityMappingError(
+                f"站点 ID {site_id} 在项目 {existing} 与 {project_id} 中重复"
+            )
+        index[site_id] = project_id
+    return index
+
+
 def _load_formal_projects(root: str | Path) -> list[dict[str, Any]]:
     return [
         load_project_config(root, item["project_id"])
@@ -174,9 +211,13 @@ def _required_endpoints_available(
         target_date,
         auth_date=target_date,
     )
-    required = {"visitor_card", "tag_dictionary"}
+    endpoint_names = set(snapshot.auth.endpoints)
+    has_visitor_source = bool(
+        {"visitor_card", "visitor_info"} & endpoint_names
+    )
     return (
-        required.issubset(snapshot.auth.endpoints)
+        "tag_dictionary" in endpoint_names
+        and has_visitor_source
         and bool(snapshot.auth.common_query)
         and bool(snapshot.auth.headers)
     )
@@ -437,6 +478,11 @@ class KstIdentityRegistry:
             if project.get("project_id")
         }
         promotion_index = build_project_promotion_index(projects)
+        project_site_index = build_project_site_index(projects)
+        site_project_index = {
+            project_id: site_id
+            for site_id, project_id in project_site_index.items()
+        }
         installations = _call_with_supported_keywords(
             self._installations_loader,
             cancel_event=cancel_event,
@@ -496,6 +542,22 @@ class KstIdentityRegistry:
                     for promotion_id in known_ids
                     if promotion_id in promotion_index
                 }
+                site_id = installation_site_id(installation)
+                site_project = project_site_index.get(site_id)
+                if site_project:
+                    if matched_projects and site_project not in matched_projects:
+                        conflicted_projects.update(
+                            matched_projects | {site_project}
+                        )
+                        matched_projects = set()
+                    else:
+                        matched_projects = {site_project}
+                elif site_id and matched_projects:
+                    matched_projects = {
+                        project_id
+                        for project_id in matched_projects
+                        if not site_project_index.get(project_id)
+                    }
                 if not _call_with_supported_keywords(
                     self._endpoint_checker,
                     installation,

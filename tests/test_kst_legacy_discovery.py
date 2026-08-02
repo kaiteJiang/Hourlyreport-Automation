@@ -761,6 +761,55 @@ def test_explicit_legacy_settings_keep_automatic_electron_when_legacy_stops(
     ]
 
 
+def test_electron_root_ignores_legacy_data_root_setting(
+    tmp_path,
+    monkeypatch,
+):
+    electron_root = tmp_path / "OnlineWebCSNew"
+    electron_root.mkdir()
+    _, legacy_data = make_legacy_tree(tmp_path)
+    save_kst_machine_settings(
+        tmp_path,
+        installation_root=electron_root,
+        data_root=legacy_data,
+    )
+    electron_item = type(
+        "ElectronInstallation",
+        (),
+        {
+            "root": electron_root,
+            "identity": "electron-id",
+            "client_family": "electron",
+        },
+    )()
+    electron_calls = []
+
+    monkeypatch.setattr(
+        discovery,
+        "discover_installations",
+        lambda **kwargs: electron_calls.append(kwargs) or [electron_item],
+    )
+    monkeypatch.setattr(
+        legacy_discovery,
+        "discover_legacy_installations",
+        lambda **_kwargs: pytest.fail(
+            "machine-selected Electron root must suppress legacy candidates"
+        ),
+    )
+
+    assert discover_all_installations(
+        tmp_path,
+        require_running_process=False,
+    ) == [electron_item]
+    assert electron_calls == [
+        {
+            "explicit_root": electron_root.resolve(),
+            "local_app_data": None,
+            "require_running_process": False,
+        }
+    ]
+
+
 def test_machine_electron_root_overrides_legacy_environment_candidate(
     tmp_path,
     monkeypatch,

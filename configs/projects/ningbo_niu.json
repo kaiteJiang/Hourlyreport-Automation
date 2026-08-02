@@ -26,28 +26,50 @@
   "accounts": [
     {
       "standard_name": "宁波博润1",
-      "baidu_names": ["宁波博润1"],
+      "baidu_names": [
+        "宁波博润1"
+      ],
       "excel_name": "宁波博润1",
-      "kst_ids": ["45144300"],
-      "kst_names": ["宁波博润1"]
+      "kst_ids": [
+        "45144300"
+      ],
+      "kst_names": [
+        "宁波博润1"
+      ]
     },
     {
       "standard_name": "宁波博润2",
-      "baidu_names": ["宁波博润2"],
+      "baidu_names": [
+        "宁波博润2"
+      ],
       "excel_name": "宁波博润2",
-      "kst_ids": ["45164655"],
-      "kst_names": ["宁波博润2"]
+      "kst_ids": [
+        "45164655"
+      ],
+      "kst_names": [
+        "宁波博润2"
+      ]
     },
     {
       "standard_name": "宁波博润12",
-      "baidu_names": ["宁波博润12"],
+      "baidu_names": [
+        "宁波博润12"
+      ],
       "excel_name": "宁波博润12",
-      "kst_ids": ["54467299"],
-      "kst_names": ["宁波博润12"]
+      "kst_ids": [
+        "54467299"
+      ],
+      "kst_names": [
+        "宁波博润12"
+      ]
     }
   ],
   "hourly": {
-    "periods": ["11点", "15点", "18点"]
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
   },
   "daily": {
     "write_fields": [
