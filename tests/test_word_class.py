@@ -287,6 +287,78 @@ def test_main_window_imports_build_word_class_command():
     import gui.main_window as main_window
 
     assert main_window.build_word_class_command is not None
+    assert main_window.build_multi_word_class_command is not None
+
+
+# ---- 多项目模式 ----
+
+def test_build_multi_word_class_command_shape():
+    from gui.command_builder import build_multi_word_class_command
+
+    cmd = build_multi_word_class_command(
+        "C:/root", "2026-08-03", ["kunming_niu", "shenyang_bai"]
+    )
+    assert cmd[cmd.index("--mode") + 1] == "run-multi"
+    assert cmd[cmd.index("--task") + 1] == "word_class"
+    assert cmd[cmd.index("--projects") + 1] == "kunming_niu,shenyang_bai"
+    assert cmd[cmd.index("--date") + 1] == "2026-08-03"
+
+
+def test_run_multi_word_class_pipeline(monkeypatch, tmp_path):
+    from modules.multi_project_runner import run_multi_project_pipeline
+
+    configs = {
+        "p1": {
+            "project_id": "p1",
+            "project_name": "项目1",
+            "excel_path": str(tmp_path / "p1" / "竞价.xlsx"),
+            "baidu": {"api_profile": "p1_api"},
+        },
+        "p2": {
+            "project_id": "p2",
+            "project_name": "项目2",
+            "excel_path": str(tmp_path / "p2" / "竞价.xlsx"),
+            "baidu": {"api_profile": "p2_api"},
+        },
+    }
+    fetched = []
+
+    def fake_runtime_loader(root, project_id):
+        return configs[project_id]
+
+    def fake_fetch_search_word(config, root, logger, target_date=None, **kw):
+        fetched.append(config["project_id"])
+        return {
+            "raw_rows": 1,
+            "matched_rows": 1,
+            "totals": {"click": 5, "cost": 1.0},
+            "keyword_counts": {},
+            "errors": [],
+        }
+
+    piped = []
+
+    def fake_word_pipeline(config, root, logger, target_date=None, **kw):
+        piped.append(config["project_id"])
+        return {"passed": True, "errors": [], "failed_step": None}
+
+    report = run_multi_project_pipeline(
+        root=tmp_path,
+        logger=_NullLogger(),
+        project_ids=["p1", "p2"],
+        task="word_class",
+        target_date="2026-08-03",
+        runtime_config_loader=fake_runtime_loader,
+        credential_checker=lambda root, config: {"passed": True, "errors": []},
+        api_fetch_search_word=fake_fetch_search_word,
+        word_class_pipeline=fake_word_pipeline,
+    )
+
+    assert set(fetched) == {"p1", "p2"}  # 百度并行预取
+    assert piped == ["p1", "p2"]  # 串行执行顺序
+    assert report["task"] == "word_class"
+    assert report["summary"]["success"] == 2
+    assert report["summary"]["failed"] == 0
 
 
 # ---- 人工导出模式 ----

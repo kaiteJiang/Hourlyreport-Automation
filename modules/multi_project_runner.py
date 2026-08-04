@@ -10,11 +10,16 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from modules.baidu_data_source import fetch_baidu_api_only_daily, fetch_baidu_api_only_hourly
+from modules.baidu_report_api import fetch_baidu_search_word_project
 from modules.config_manager import load_config
 from modules.multi_project_selection import validate_multi_project_ids
 from modules.preflight import check_baidu_api_profiles
 from modules.project_config import build_runtime_config_from_project, load_project_config
-from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
+from modules.run_pipeline import (
+    run_daily_pipeline,
+    run_half_auto_pipeline,
+    run_word_class_pipeline,
+)
 from modules.task_stop_gate import read_task_stop_decision
 
 
@@ -62,6 +67,8 @@ def _project_artifact_config(
     baidu = dict(runtime.get("baidu") or {})
     if task == "daily":
         baidu["daily_output_path"] = str(project_dir / "baidu_daily_data.json")
+    elif task == "word_class":
+        baidu["search_word_output_path"] = str(project_dir / "baidu_search_word_data.json")
     else:
         baidu["output_path"] = str(project_dir / "baidu_account_data.json")
     runtime["baidu"] = baidu
@@ -94,17 +101,19 @@ def run_multi_project_pipeline(
     credential_checker: CredentialChecker = check_baidu_api_profiles,
     api_fetch_hourly: Callable[..., dict[str, Any]] = fetch_baidu_api_only_hourly,
     api_fetch_daily: Callable[..., dict[str, Any]] = fetch_baidu_api_only_daily,
+    api_fetch_search_word: Callable[..., dict[str, Any]] = fetch_baidu_search_word_project,
     hourly_pipeline: Callable[..., dict[str, Any]] = run_half_auto_pipeline,
     daily_pipeline: Callable[..., dict[str, Any]] = run_daily_pipeline,
+    word_class_pipeline: Callable[..., dict[str, Any]] = run_word_class_pipeline,
     max_workers: int = 3,
 ) -> dict[str, Any]:
     root_path = Path(root)
     selected = validate_multi_project_ids(project_ids, project_ids)
-    if task not in {"hourly", "daily"}:
-        raise ValueError("多项目任务类型只支持 hourly 或 daily")
+    if task not in {"hourly", "daily", "word_class"}:
+        raise ValueError("多项目任务类型只支持 hourly、daily 或 word_class")
     if task == "hourly" and not str(period or "").strip():
         raise ValueError("多项目小时报缺少时段")
-    if task == "daily" and not target_date:
+    if task in {"daily", "word_class"} and not target_date:
         target_date = (date.today() - timedelta(days=1)).isoformat()
 
     started_at = datetime.now().isoformat(timespec="seconds")
@@ -146,6 +155,13 @@ def run_multi_project_pipeline(
         try:
             if task == "daily":
                 report = api_fetch_daily(
+                    config=config,
+                    root=root_path,
+                    logger=logger,
+                    target_date=target_date,
+                )
+            elif task == "word_class":
+                report = api_fetch_search_word(
                     config=config,
                     root=root_path,
                     logger=logger,
@@ -219,6 +235,14 @@ def run_multi_project_pipeline(
                     kst_file=None,
                     fetch_baidu_func=cached_fetch,
                 )
+            elif task == "word_class":
+                pipeline_report = word_class_pipeline(
+                    config=config,
+                    root=root_path,
+                    logger=logger,
+                    target_date=target_date,
+                    fetch_search_word_func=cached_fetch,
+                )
             else:
                 pipeline_report = hourly_pipeline(
                     config=config,
@@ -255,7 +279,7 @@ def run_multi_project_pipeline(
         "run_id": run_id,
         "task": task,
         "period": period if task == "hourly" else None,
-        "date": target_date if task == "daily" else None,
+        "date": target_date if task in {"daily", "word_class"} else None,
         "selected_project_ids": selected,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),

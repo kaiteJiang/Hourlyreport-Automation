@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", default=None, help="日报日期，例如：2026-05-07；不传则默认昨天")
     parser.add_argument("--project", default=None, help="临时指定项目 ID，不修改 configs/app_config.json")
     parser.add_argument("--projects", default=None, help="多项目模式使用的逗号分隔项目 ID，按输入顺序执行")
-    parser.add_argument("--task", choices=["hourly", "daily"], default="hourly", help="preflight 任务类型，默认检查小时报")
+    parser.add_argument("--task", choices=["hourly", "daily", "word_class"], default="hourly", help="preflight/多项目任务类型，默认检查小时报")
     parser.add_argument("--quick", action="store_true", help="preflight 快速模式：跳过耗时的 Excel sheet 结构扫描")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")

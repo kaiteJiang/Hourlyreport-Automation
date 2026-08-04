@@ -58,6 +58,7 @@ from gui.command_builder import (
     build_hourly_command,
     build_multi_daily_command,
     build_multi_hourly_command,
+    build_multi_word_class_command,
     build_preflight_command,
     build_word_class_command,
 )
@@ -4072,13 +4073,21 @@ class MainWindow(QMainWindow):
             self.append_log("[提示] 已有任务在执行或启动中，词类占比未启动。请等待当前任务结束后重试。")
             return
         date_text = self.selected_daily_date()
-        command = build_word_class_command(
-            self.root,
-            date_text,
-            project_id=self.selected_project_id(),
-        )
-        subtitle = f"{self.selected_project_name()} {self.display_daily_date()}"
+        selected_ids = self.project_combo.selected_project_ids()
+        self._multi_task_active = self.project_combo.is_multi_mode()
+        if self._multi_task_active:
+            command = build_multi_word_class_command(self.root, date_text, selected_ids)
+            subtitle = f"{'、'.join(self.selected_project_names())} {self.display_daily_date()}"
+        else:
+            command = build_word_class_command(
+                self.root,
+                date_text,
+                project_id=self.selected_project_id(),
+            )
+            subtitle = f"{self.selected_project_name()} {self.display_daily_date()}"
         self.set_current_flow("word_class", "词类占比", subtitle, "运行中")
+        if self._multi_task_active:
+            self.current_project_name = "、".join(self.selected_project_names())
         self._last_pet_event = ""
         self.desktop_pet.announce(f"{subtitle}词类占比正在统计。", "running")
         self.start_command("词类占比执行中", command)

@@ -98,6 +98,13 @@ def build_multi_daily_command(root: str | Path, date_text: str | None, project_i
     return command
 
 
+def build_multi_word_class_command(root: str | Path, date_text: str | None, project_ids: list[str]) -> list[str]:
+    command = _multi_command(root, "word_class", project_ids)
+    if date_text:
+        command.extend(["--date", str(date_text)])
+    return command
+
+
 def build_preflight_command(root: str | Path, task: str, project_id: str | None = None) -> list[str]:
     command = [
         str(python_exe(root)),
