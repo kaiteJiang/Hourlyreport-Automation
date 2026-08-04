@@ -299,6 +299,18 @@ def get_excel_path(project: dict[str, Any], root: str | Path | None = None) -> P
     return Path(root) / path
 
 
+def get_word_share_path(
+    project: dict[str, Any],
+    year: str | int,
+    root: str | Path | None = None,
+) -> Path:
+    excel = get_excel_path(project, root)
+    name = str(normalize_project_config(project).get("project_name") or "").strip()
+    if not name:
+        raise ValueError("项目缺少 project_name，无法推导词类占比文件名")
+    return excel.parent / f"【{name}】{year}词类占比数据.xlsx"
+
+
 def get_kst_export_dir(project: dict[str, Any], root: str | Path | None = None) -> Path:
     project = normalize_project_config(project)
     value = project["kst"]["export_dir"]
@@ -310,6 +322,13 @@ def get_kst_export_dir(project: dict[str, Any], root: str | Path | None = None) 
 
 def get_daily_sheet(project: dict[str, Any]) -> str:
     return str(normalize_project_config(project)["excel"].get("daily_sheet") or "百度")
+
+
+def get_word_share_sheet(project: dict[str, Any]) -> str:
+    return str(
+        normalize_project_config(project)["excel"].get("word_share_sheet")
+        or "词类占比日数据"
+    )
 
 
 def get_hourly_sheet(project: dict[str, Any]) -> str:
@@ -339,6 +358,7 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     config["excel_engine"] = project["excel"].get("engine", "openpyxl")
     config["sheet_name"] = get_hourly_sheet(project)
     config["daily_sheet_name"] = get_daily_sheet(project)
+    config["word_share_sheet_name"] = get_word_share_sheet(project)
 
     baidu = dict(config.get("baidu", {}))
     baidu["credential_project"] = get_credential_profile(project)

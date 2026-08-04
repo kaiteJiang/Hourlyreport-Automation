@@ -55,6 +55,21 @@ def build_daily_command(root: str | Path, date_text: str | None, project_id: str
     return command
 
 
+def build_word_class_command(root: str | Path, date_text: str | None, project_id: str | None = None) -> list[str]:
+    command = [
+        str(python_exe(root)),
+        "-u",
+        str(_main_py(root)),
+        "--mode",
+        "run-word-class",
+    ]
+    _append_project(command, project_id)
+    if date_text:
+        command.extend(["--date", str(date_text)])
+    command.append("--yes")
+    return command
+
+
 def _multi_command(root: str | Path, task: str, project_ids: list[str]) -> list[str]:
     selected = [str(project_id).strip() for project_id in project_ids if str(project_id).strip()]
     return [

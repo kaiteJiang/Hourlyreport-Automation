@@ -39,7 +39,8 @@ from modules.maintenance import archive_logs, build_runtime_dependency_lock, cre
 from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, load_project_config, validate_project_config
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
-from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
+from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline, run_word_class_pipeline
+from modules.baidu_report_api import fetch_baidu_search_word_report
 from modules.multi_project_runner import run_multi_project_pipeline
 from modules.multi_project_stop import resolve_multi_queue_stop_gate
 from modules.task_stop_gate import pipeline_exit_code
@@ -87,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
         "write-daily",
         "run",
         "run-daily",
+        "run-word-class",
+        "fetch-baidu-search-word",
         "run-multi",
         "list-projects",
         "show-project",
@@ -610,6 +613,43 @@ def main() -> int | None:
             print_final_success(f"日报一键流完成：reports/daily_final_run_report.json")
         else:
             print_final_failure(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/daily_final_run_report.json")
+        return pipeline_exit_code(report)
+    if args.mode == "fetch-baidu-search-word":
+        report = fetch_baidu_search_word_report(
+            config=config,
+            root=ROOT,
+            logger=logger,
+            target_date=args.date,
+        )
+        out = ROOT / "reports" / "baidu_search_word_data.json"
+        print_success(f"百度搜索词报告已输出：{out}")
+        totals = report.get("totals") or {}
+        print_quiet_line(
+            f"原始行 {report.get('raw_rows')}，命中 {report.get('matched_rows')}，"
+            f"点击 {totals.get('click')}，消费 {totals.get('cost')}"
+        )
+        return 0
+    if args.mode == "run-word-class":
+        credential_report = check_baidu_credentials(ROOT, config)
+        if not credential_report.get("passed"):
+            print_credential_report(credential_report)
+            print_error("凭据预检未通过，请检查 secrets/secrets.json")
+            return 1
+        report = run_word_class_pipeline(
+            config=config,
+            root=ROOT,
+            logger=logger,
+            target_date=args.date,
+        )
+        out = ROOT / "reports" / "word_class_final_run_report.json"
+        if report.get("cancelled"):
+            print_warning("词类占比任务已在 Excel 写入前安全停止")
+        elif report.get("passed"):
+            print_final_success(f"词类占比完成：{out}")
+        else:
+            print_final_failure(
+                f"词类占比中断，失败步骤：{report.get('failed_step')}，报告：{out}"
+            )
         return pipeline_exit_code(report)
 
 

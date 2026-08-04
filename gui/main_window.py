@@ -98,6 +98,7 @@ from modules.project_config import (
     get_data_source_preference,
     get_excel_path,
     get_kst_data_source,
+    get_word_share_path,
     load_project_config,
     set_kst_data_source,
     set_data_source_preference as save_data_source_preference,
@@ -2262,12 +2263,12 @@ class MainWindow(QMainWindow):
         self.daily_action_control.setFixedHeight(44)
         self.daily_button = self.daily_action_control.run_button
         self.daily_stop_button = self.daily_action_control.stop_button
-        self.default_yesterday_button = self._make_secondary_button("默认昨天")
-        self.default_yesterday_button.setObjectName("dateHintButton")
-        self.default_yesterday_button.setFixedHeight(44)
-        self.default_yesterday_button.clicked.connect(self.reset_daily_date_to_yesterday)
+        self.word_class_button = self._make_secondary_button("词类占比")
+        self.word_class_button.setObjectName("dateHintButton")
+        self.word_class_button.setFixedHeight(44)
+        self.word_class_button.clicked.connect(self.run_word_class)
         daily_button_row.addWidget(self.daily_action_control, 3)
-        daily_button_row.addWidget(self.default_yesterday_button, 1)
+        daily_button_row.addWidget(self.word_class_button, 1)
         daily_layout.addLayout(daily_button_row)
 
         date_title = QLabel("日报日期")
@@ -2286,6 +2287,7 @@ class MainWindow(QMainWindow):
 
         self.hourly_button.clicked.connect(self.run_hourly)
         self.daily_button.clicked.connect(self.run_daily)
+        self.word_class_button.clicked.connect(self.run_word_class)
         self.hourly_stop_button.clicked.connect(self.stop_current_task)
         self.daily_stop_button.clicked.connect(self.stop_current_task)
 
@@ -3536,7 +3538,7 @@ class MainWindow(QMainWindow):
         self._sync_excel_auto_open_menu()
 
     def should_open_excel_after_task(self, task: str) -> bool:
-        return task in {"hourly", "daily"} and bool(self.open_excel_automatically)
+        return task in {"hourly", "daily", "word_class"} and bool(self.open_excel_automatically)
 
     def _sync_excel_auto_open_menu(self) -> None:
         enabled = bool(self.open_excel_automatically)
@@ -4062,6 +4064,21 @@ class MainWindow(QMainWindow):
         self.desktop_pet.announce(f"{subtitle}日报正在做。", "running")
         self.start_command("日报执行中", command)
 
+    def run_word_class(self) -> None:
+        if self.multi_project_execution_pending():
+            return
+        date_text = self.selected_daily_date()
+        command = build_word_class_command(
+            self.root,
+            date_text,
+            project_id=self.selected_project_id(),
+        )
+        subtitle = f"{self.selected_project_name()} {self.display_daily_date()}"
+        self.set_current_flow("word_class", "词类占比", subtitle, "运行中")
+        self._last_pet_event = ""
+        self.desktop_pet.announce(f"{subtitle}词类占比正在统计。", "running")
+        self.start_command("词类占比执行中", command)
+
     def run_environment_preflight(self, allow_multi: bool = False) -> None:
         self.run_preflight("hourly", allow_multi=allow_multi)
 
@@ -4116,7 +4133,7 @@ class MainWindow(QMainWindow):
         self.status_detail.setText("任务正在运行，请不要关闭窗口。")
         self.progress_text.setText("任务已创建，等待启动...")
         self.reset_log_display()
-        if self.current_task_type in {"hourly", "daily"}:
+        if self.current_task_type in {"hourly", "daily", "word_class"}:
             gate_name = ".gui_multi_queue_stop" if self._multi_task_active else ".gui_task_stop"
             self._task_stop_gate = self.root / "reports" / f"{gate_name}_{os.getpid()}.gate"
             clear_task_stop_gate(self._task_stop_gate)
@@ -4136,7 +4153,7 @@ class MainWindow(QMainWindow):
         self.mark_stage("config")
 
     def stop_current_task(self) -> None:
-        if self.current_task_type not in {"hourly", "daily"}:
+        if self.current_task_type not in {"hourly", "daily", "word_class"}:
             return
         if self._task_stop_locked or self._task_stop_requested or not self.runner.is_running():
             return
@@ -4259,10 +4276,17 @@ class MainWindow(QMainWindow):
             self.flow_crab.set_mode("idle")
             self.flow_crab.show()
             self.append_log("任务完成，退出码 0")
-            if self.current_task_type in {"hourly", "daily"}:
-                task_name = "小时报" if self.current_task_type == "hourly" else "日报"
+            if self.current_task_type in {"hourly", "daily", "word_class"}:
+                task_name = {
+                    "hourly": "小时报",
+                    "daily": "日报",
+                    "word_class": "词类占比",
+                }[self.current_task_type]
                 if self.should_open_excel_after_task(self.current_task_type):
-                    self.open_current_project_excel()
+                    if self.current_task_type == "word_class":
+                        self.open_current_project_word_share_excel()
+                    else:
+                        self.open_current_project_excel()
                     self.desktop_pet.announce(
                         f"{self.current_project_name} {task_name}完成啦，Excel 已经打开。",
                         "jumping",
@@ -4334,6 +4358,7 @@ class MainWindow(QMainWindow):
         run_enabled = enabled and has_projects
         self.hourly_action_control.set_run_enabled(run_enabled)
         self.daily_action_control.set_run_enabled(run_enabled)
+        self.word_class_button.setEnabled(run_enabled)
         self.project_check_action.setEnabled(enabled and has_projects)
 
     def set_stop_controls(self) -> None:
@@ -4344,7 +4369,7 @@ class MainWindow(QMainWindow):
             and not self._task_stop_locked
         )
         self.hourly_action_control.set_stop_enabled(can_stop and self.current_task_type == "hourly")
-        self.daily_action_control.set_stop_enabled(can_stop and self.current_task_type == "daily")
+        self.daily_action_control.set_stop_enabled(can_stop and self.current_task_type in {"daily", "word_class"})
 
     def set_data_source_control_locked(self, locked: bool) -> None:
         self.data_source_control.setEnabled(not locked)
@@ -4461,6 +4486,22 @@ class MainWindow(QMainWindow):
             return
         self.open_path(excel_path)
         self.append_log(f"已打开当前项目 Excel：{excel_path}")
+
+    def open_current_project_word_share_excel(self) -> None:
+        try:
+            project_id = self.selected_project_id()
+            project = load_project_config(self.root, project_id)
+            date_text = self.selected_daily_date()
+            year = date_text[:4] if date_text else str(date.today().year)
+            word_share_path = get_word_share_path(project, year, self.root)
+        except Exception as exc:
+            self.append_log(f"任务完成，但读取词类占比路径失败：{exc}")
+            return
+        if not word_share_path.exists():
+            self.append_log(f"任务完成，但词类占比 Excel 不存在：{word_share_path}")
+            return
+        self.open_path(word_share_path)
+        self.append_log(f"已打开当前项目词类占比 Excel：{word_share_path}")
 
     def load_multi_project_report(self) -> dict:
         path = self.root / "reports" / "multi_project_run_report.json"

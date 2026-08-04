@@ -905,3 +905,264 @@ def write_merged_daily_data(
 
 def write_account_data(*args, **kwargs):
     return write_merged_hourly_data(*args, **kwargs)
+
+
+WORD_SHARE_SHEET_NAME = "词类占比日数据"
+WORD_SHARE_FIELD_ALIASES = {
+    "日期": ["日期"],
+    "点击": ["点击", "点击量"],
+    "消费": ["消费", "花费"],
+    "有效对话": ["有效对话"],
+    "有效转潜": ["有效转潜", "转潜"],
+    "到诊": ["到诊", "就诊"],
+}
+WORD_SHARE_WRITE_FIELDS = ["点击", "消费", "有效对话", "有效转潜"]
+WORD_SHARE_SKIP_FIELDS = ["到诊"]
+
+
+def _word_share_excel_path(
+    config: dict[str, Any],
+    root: Path,
+    target_date: date,
+) -> Path:
+    excel_value = str(config.get("excel_path") or "").strip()
+    if not excel_value:
+        raise ValueError("config 缺少 excel_path，无法推导词类占比文件位置")
+    excel_path = Path(excel_value)
+    if not excel_path.is_absolute():
+        excel_path = root / excel_path
+    project_name = str(config.get("project_name") or "").strip()
+    if not project_name:
+        raise ValueError("项目缺少 project_name，无法推导词类占比文件名")
+    return excel_path.parent / f"【{project_name}】{target_date.year}词类占比数据.xlsx"
+
+
+def _word_share_cell_date_matches(value: Any, target_date: date) -> bool:
+    if isinstance(value, datetime):
+        return value.date() == target_date
+    if isinstance(value, date):
+        return value == target_date
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            from openpyxl.utils.datetime import from_excel
+            return from_excel(float(value)).date() == target_date
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return _cell_date_matches(value, target_date)
+
+
+def _scan_word_share_headers(ws: Worksheet) -> dict[str, Any]:
+    columns: dict[str, int] = {}
+    header_row: int | None = None
+    max_row = min(int(ws.max_row or 1), 3)
+    for row in range(1, max_row + 1):
+        found_in_row: dict[str, int] = {}
+        for column in range(1, (ws.max_column or 1) + 1):
+            cell_value = ws.cell(row=row, column=column).value
+            if cell_value in (None, ""):
+                continue
+            normalized = normalize_text(cell_value)
+            for field, aliases in WORD_SHARE_FIELD_ALIASES.items():
+                if normalized in {normalize_text(alias) for alias in aliases}:
+                    found_in_row[field] = column
+        if found_in_row:
+            if header_row is None:
+                header_row = row
+            for field, column in found_in_row.items():
+                columns.setdefault(field, column)
+    return {
+        "header_row": header_row,
+        "columns": columns,
+    }
+
+
+def _find_word_share_target_row(
+    ws: Worksheet,
+    date_col: int,
+    target_date: date,
+    merged_values: dict[tuple[int, int], Any],
+) -> int | None:
+    for row in range(1, (ws.max_row or 1) + 1):
+        value = _get_merged_value(ws, row, date_col, merged_values)
+        if _word_share_cell_date_matches(value, target_date):
+            return row
+    return None
+
+
+def write_word_share_data(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    source_path = root / "reports" / "word_share_data.json"
+    out_path = root / "reports" / "word_share_write_report.json"
+    report: dict[str, Any] = {
+        "mode": "write-word-share",
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "source": str(source_path),
+        "excel_path": None,
+        "sheet_name": None,
+        "date": target_date,
+        "backup_path": None,
+        "writes": [],
+        "overwrite_summary": {"overwrite_count": 0, "items": []},
+        "skipped_fields": list(WORD_SHARE_SKIP_FIELDS),
+        "warnings": [],
+        "errors": [],
+        "self_check": {
+            "merged_data_exists": source_path.exists(),
+            "backup_created": False,
+            "structure_passed": False,
+            "wrote_forbidden_field": False,
+            "filter_ui_metadata_restored": False,
+            "verification_passed": False,
+        },
+    }
+
+    def finish() -> dict[str, Any]:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return report
+
+    if not source_path.exists():
+        report["errors"].append(f"找不到词类占比数据文件：{source_path}")
+        return finish()
+    try:
+        merged = json.loads(source_path.read_text(encoding="utf-8"))
+        merged_date = _parse_report_date(merged.get("date"))
+        if target_date and merged_date.isoformat() != target_date:
+            report["errors"].append(
+                f"词类占比数据日期不匹配：目标 {target_date}，文件 {merged_date.isoformat()}"
+            )
+            return finish()
+        excel_path = _word_share_excel_path(config, root, merged_date)
+        sheet_name = str(config.get("word_share_sheet_name") or WORD_SHARE_SHEET_NAME)
+    except Exception as exc:
+        report["errors"].append(str(exc))
+        return finish()
+
+    report["excel_path"] = str(excel_path)
+    report["date"] = merged_date.isoformat()
+    report["sheet_name"] = sheet_name
+
+    if not excel_path.exists():
+        report["errors"].append(f"找不到词类占比 Excel 文件：{excel_path}（不新建）")
+        return finish()
+
+    lock_candidates = [path for path in excel_path.parent.glob("~$*.xlsx") if path.is_file()]
+    if lock_candidates:
+        report["warnings"].append(
+            f"检测到 Excel/WPS 打开锁文件：{'、'.join(path.name for path in lock_candidates)}，写入可能失败"
+        )
+        logger.warning("词类占比 Excel 可能正被打开：%s", lock_candidates)
+
+    metrics = merged.get("metrics") or {}
+    wb = load_workbook(excel_path, data_only=False, read_only=False)
+    if sheet_name not in wb.sheetnames:
+        report["errors"].append(f"找不到 sheet：{sheet_name}")
+        wb.close()
+        return finish()
+    ws = wb[sheet_name]
+    structure = _scan_word_share_headers(ws)
+    columns = structure.get("columns") or {}
+    required = ["日期", *WORD_SHARE_WRITE_FIELDS]
+    missing = [field for field in required if not columns.get(field)]
+    if missing:
+        report["errors"].append(f"词类占比表头缺少字段：{'、'.join(missing)}")
+        wb.close()
+        return finish()
+    report["self_check"]["structure_passed"] = True
+    date_col = int(columns["日期"])
+    logger.info("词类占比 Excel 结构识别通过（表头行 %s）。", structure.get("header_row"))
+
+    try:
+        backup_path = _make_backup(excel_path, root)
+    except OSError as exc:
+        wb.close()
+        report["errors"].append(f"词类占比备份失败（Excel 可能被占用）：{exc}")
+        return finish()
+    report["backup_path"] = str(backup_path)
+    report["self_check"]["backup_created"] = backup_path.exists()
+    logger.info("词类占比写入前备份已创建：%s", backup_path)
+
+    merged_values = _build_merged_value_map(ws)
+    row = _find_word_share_target_row(ws, date_col, merged_date, merged_values)
+    if row is None:
+        report["errors"].append(f"词类占比表找不到日期行：{merged_date.isoformat()}")
+        wb.close()
+        return finish()
+
+    planned_writes: list[dict[str, Any]] = []
+    for field in WORD_SHARE_WRITE_FIELDS:
+        if field not in metrics:
+            report["errors"].append(f"词类占比数据缺少字段：{field}")
+            continue
+        cell = ws.cell(row=row, column=int(columns[field]))
+        old_value = _json_safe(cell.value)
+        op = {
+            "date": merged_date.isoformat(),
+            "field": field,
+            "cell": cell.coordinate,
+            "old_value": old_value,
+            "new_value": metrics[field],
+            "verified": False,
+        }
+        if old_value not in (None, ""):
+            report["overwrite_summary"]["items"].append({
+                "field": field,
+                "cell": cell.coordinate,
+                "old_value": old_value,
+                "new_value": metrics[field],
+            })
+        planned_writes.append(op)
+    forbidden_written = {op["field"] for op in planned_writes} & set(WORD_SHARE_SKIP_FIELDS)
+    if forbidden_written:
+        report["self_check"]["wrote_forbidden_field"] = True
+        report["errors"].append(f"检测到禁止写入字段：{', '.join(sorted(forbidden_written))}")
+    if report["errors"]:
+        wb.close()
+        logger.error("词类占比正式写入中断：%s", report["errors"])
+        return finish()
+
+    report["overwrite_summary"]["overwrite_count"] = len(report["overwrite_summary"]["items"])
+    if report["overwrite_summary"]["overwrite_count"]:
+        logger.warning("词类占比写入会覆盖 %s 个已有值。", report["overwrite_summary"]["overwrite_count"])
+
+    for op in planned_writes:
+        ws[op["cell"]].value = op["new_value"]
+    try:
+        wb.save(excel_path)
+    except OSError as exc:
+        wb.close()
+        report["errors"].append(format_openpyxl_save_error(excel_path, exc))
+        return finish()
+    wb.close()
+    report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        None,
+        logger,
+    )
+    logger.info("词类占比数据已写入并保存：%s", excel_path)
+
+    read_back_values = _read_back_values(
+        excel_path,
+        sheet_name,
+        [op["cell"] for op in planned_writes],
+    )
+    for op in planned_writes:
+        read_back = read_back_values.get(op["cell"])
+        op["read_back_value"] = _json_safe(read_back)
+        op["verified"] = _values_match(read_back, op["new_value"])
+        if not op["verified"]:
+            report["errors"].append(
+                f"词类占比写入后复核不一致：{op['field']} {op['cell']}"
+            )
+    report["writes"] = planned_writes
+    report["self_check"]["verification_passed"] = (
+        not report["errors"] and all(op["verified"] for op in planned_writes)
+    )
+    logger.info("词类占比写入报告已输出：%s", out_path)
+    return finish()

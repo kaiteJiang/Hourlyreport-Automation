@@ -172,3 +172,40 @@ def aggregate_kst_daily_rows(
         "unmatched_rows": unmatched_rows,
         "errors": errors,
     }
+
+
+def aggregate_word_class_conversations(
+    conversations: list[dict[str, Any]],
+    keywords: tuple[str, ...] = ("银屑病", "牛皮癣"),
+) -> dict[str, Any]:
+    """筛选搜索关键词(回退竞价词)含关键字的对话,统计词类占比指标。
+
+    有效对话 = 关键词命中 且 标签含"有效"二字(含"有效-一般");
+    有效转潜 = 关键词命中 且 标签含"转潜-有效"(有效转潜 ⊆ 有效对话)。
+    """
+    counts = {"总对话": 0, "有效对话": 0, "有效转潜": 0}
+    keyword_counts = {keyword: 0 for keyword in keywords}
+    matched_conversations = 0
+    for conv in conversations:
+        if not isinstance(conv, dict):
+            continue
+        text = f"{conv.get('keyword') or ''} {conv.get('bid_word') or ''}".strip()
+        if not any(keyword in text for keyword in keywords):
+            continue
+        matched_conversations += 1
+        for keyword in keywords:
+            if keyword in text:
+                keyword_counts[keyword] += 1
+        tags_text = " | ".join(
+            str(tag) for tag in (conv.get("tags") or []) if tag
+        )
+        counts["总对话"] += 1
+        if "有效" in tags_text:
+            counts["有效对话"] += 1
+        if "转潜-有效" in tags_text:
+            counts["有效转潜"] += 1
+    return {
+        "counts": counts,
+        "matched_conversations": matched_conversations,
+        "keyword_counts": keyword_counts,
+    }

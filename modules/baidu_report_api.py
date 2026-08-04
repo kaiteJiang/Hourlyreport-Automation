@@ -17,6 +17,21 @@ from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_tok
 REPORT_API_URL = "https://api.baidu.com/json/sms/service/OpenApiReportService/getReportData"
 ACCOUNT_REPORT_TYPE = 2208157
 REPORT_COLUMNS = ["date", "userName", "userId", "impression", "click", "cost"]
+# 搜索词报告（搜索推广，词维度）。经真实 API 探针校准：reportType=2307838，
+# 行键为 date/userName/userId/queryWord/impression/click/cost。
+SEARCH_WORD_REPORT_TYPE = 2307838
+SEARCH_WORD_COLUMNS = [
+    "date",
+    "userName",
+    "userId",
+    "queryWord",
+    "impression",
+    "click",
+    "cost",
+]
+WORD_CLASS_KEYWORDS = ("银屑病", "牛皮癣")
+SEARCH_WORD_PAGE_SIZE = 1000
+SEARCH_WORD_MAX_PAGES = 50
 ATTEMPT_ERROR_SUMMARIES = {
     "api_error": "百度 API 读取失败，请稍后重试",
     "authorization_error": "百度 API 授权校验失败，请检查授权状态",
@@ -204,6 +219,77 @@ def _build_payload(username: str, token: str, user_ids: list[int], target_date: 
             "rowCount": max(20, len(user_ids)),
             "needSum": True,
         },
+    }
+
+
+def _build_search_word_payload(
+    username: str,
+    token: str,
+    user_ids: list[int],
+    target_date: str,
+    start_row: int = 0,
+    row_count: int = SEARCH_WORD_PAGE_SIZE,
+) -> dict[str, Any]:
+    return {
+        "header": {"userName": username, "accessToken": token},
+        "body": {
+            "reportType": SEARCH_WORD_REPORT_TYPE,
+            "userIds": user_ids,
+            "startDate": target_date,
+            "endDate": target_date,
+            "timeUnit": "DAY",
+            "columns": SEARCH_WORD_COLUMNS,
+            "sorts": [],
+            "filters": [],
+            "startRow": start_row,
+            "rowCount": row_count,
+            "needSum": False,
+        },
+    }
+
+
+def aggregate_search_word_rows(
+    rows: list[dict[str, Any]],
+    keywords: tuple[str, ...] = WORD_CLASS_KEYWORDS,
+) -> dict[str, Any]:
+    """按搜索词列 queryWord 过滤含关键字(银屑病/牛皮癣)的行,加总点击/消费/展现。"""
+    click = 0
+    cost = 0.0
+    impression = 0
+    matched_rows = 0
+    keyword_counts = {keyword: 0 for keyword in keywords}
+    errors: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        search_word = str(row.get("queryWord") or "").strip()
+        if not search_word:
+            continue
+        if not any(keyword in search_word for keyword in keywords):
+            continue
+        matched_rows += 1
+        for keyword in keywords:
+            if keyword in search_word:
+                keyword_counts[keyword] += 1
+        row_click = _number(row.get("click"), integer=True)
+        row_cost = _number(row.get("cost"))
+        row_impression = _number(row.get("impression"), integer=True)
+        if row_click is None or row_cost is None or row_impression is None:
+            errors.append(f"搜索词 {search_word} 存在非有限数字")
+            continue
+        if row_click < 0 or row_cost < 0 or row_impression < 0:
+            errors.append(f"搜索词 {search_word} 存在负数值")
+            continue
+        click += row_click
+        cost = round(cost + row_cost, 2)
+        impression += row_impression
+    return {
+        "click": click,
+        "cost": cost,
+        "impression": impression,
+        "matched_rows": matched_rows,
+        "keyword_counts": keyword_counts,
+        "errors": errors,
     }
 
 
@@ -707,3 +793,227 @@ def fetch_baidu_api_probe(
     _write_json(report_path, report)
     logger.info("百度 API 只读探测完成：%s；结果：%s", report_path, "通过" if not report["errors"] else "失败")
     return report
+
+
+def _fetch_baidu_search_word_production(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    *,
+    selected_date: str,
+    output_path: Path,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]],
+    commit_standard_report: bool,
+    commit_attempt_report: bool,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]],
+    task_context: dict[str, Any] | None,
+    deadline: float | None,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    started_at = datetime.now().isoformat(timespec="seconds")
+    context = task_context if isinstance(task_context, dict) else {}
+    context.setdefault("refresh_attempted", False)
+    context.setdefault("report_request_count", 0)
+    actions = context.setdefault("self_heal_actions", [])
+    if not isinstance(actions, list):
+        actions = []
+        context["self_heal_actions"] = actions
+
+    def add_action(action: str) -> None:
+        if action not in actions:
+            actions.append(action)
+
+    def provide_token(api_profile: str, *, force_refresh: bool) -> tuple[str, dict[str, Any]]:
+        if force_refresh:
+            if context.get("refresh_attempted"):
+                raise BaiduReportApiError(
+                    "本次任务已刷新过百度授权令牌，授权仍不可用",
+                    category="authorization_error",
+                )
+            context["refresh_attempted"] = True
+            add_action("token_refresh")
+        timeout = _remaining_timeout(
+            float(config.get("baidu", {}).get("api_timeout_seconds", 30)),
+            deadline,
+            clock,
+        )
+        try:
+            token_value, metadata = token_provider(
+                config,
+                root,
+                api_profile,
+                force_refresh=force_refresh,
+                timeout_seconds=timeout,
+                clock=clock,
+            )
+        except BaiduTokenError as exc:
+            raise BaiduReportApiError(
+                str(exc),
+                category=exc.category,
+                reauthorization_required=exc.reauthorization_required,
+            ) from exc
+        if str((metadata or {}).get("token_refresh") or "") == "refreshed":
+            context["refresh_attempted"] = True
+            add_action("token_refresh")
+        return token_value, metadata
+
+    def request_report(payload: dict[str, Any]) -> dict[str, Any]:
+        timeout = _remaining_timeout(
+            float(config.get("baidu", {}).get("api_timeout_seconds", 30)),
+            deadline,
+            clock,
+        )
+        context["report_request_count"] = int(context.get("report_request_count") or 0) + 1
+        return transport(REPORT_API_URL, payload, timeout)
+
+    try:
+        date.fromisoformat(selected_date)
+        username, api_profile, _secrets = _load_api_identity(root, config)
+        user_ids, account_by_id = _account_user_ids(config)
+        token, token_metadata = provide_token(api_profile, force_refresh=False)
+
+        all_rows: list[dict[str, Any]] = []
+        total_row_count: Any = None
+        start_row = 0
+        page = 0
+        while True:
+            payload = _build_search_word_payload(
+                username,
+                token,
+                user_ids,
+                selected_date,
+                start_row=start_row,
+                row_count=SEARCH_WORD_PAGE_SIZE,
+            )
+            response = request_report(payload)
+            if page == 0 and _failure_codes(response) & {"894061", "89406"}:
+                token, token_metadata = provide_token(api_profile, force_refresh=True)
+                payload = _build_search_word_payload(
+                    username,
+                    token,
+                    user_ids,
+                    selected_date,
+                    start_row=start_row,
+                    row_count=SEARCH_WORD_PAGE_SIZE,
+                )
+                response = request_report(payload)
+            if not _response_succeeded(response):
+                _raise_api_failure(response)
+            wrapper = (response.get("body") or {}).get("data") or [{}]
+            wrapper = wrapper[0] if wrapper and isinstance(wrapper[0], dict) else {}
+            rows = wrapper.get("rows") or []
+            total_row_count = wrapper.get("totalRowCount")
+            all_rows.extend(rows)
+            page += 1
+            if (
+                not rows
+                or total_row_count is None
+                or len(all_rows) >= int(total_row_count)
+                or page >= SEARCH_WORD_MAX_PAGES
+            ):
+                break
+            start_row += len(rows)
+
+        aggregate = aggregate_search_word_rows(all_rows)
+        report: dict[str, Any] = {
+            "project_id": config.get("project_id"),
+            "project_name": config.get("project_name"),
+            "date": selected_date,
+            "source": "baidu_open_api_search_word",
+            "report_type": SEARCH_WORD_REPORT_TYPE,
+            "columns": SEARCH_WORD_COLUMNS,
+            "raw_rows": len(all_rows),
+            "matched_rows": aggregate["matched_rows"],
+            "totals": {
+                "click": aggregate["click"],
+                "cost": aggregate["cost"],
+                "impression": aggregate["impression"],
+            },
+            "keyword_counts": aggregate["keyword_counts"],
+            "row_pages": page,
+            "total_row_count": total_row_count,
+            "errors": aggregate["errors"],
+            "diagnostics": {
+                "api_request_count": int(context.get("report_request_count") or 0),
+                "self_heal_actions": list(actions),
+                "token": _safe_token_metadata(token_metadata, api_profile),
+            },
+            "self_check": {
+                "passed": not aggregate["errors"],
+                "wrote_excel": False,
+                "production_output_replaced": bool(commit_standard_report),
+            },
+            "started_at": started_at,
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        if commit_standard_report:
+            _write_json_atomic(output_path, report)
+        logger.info(
+            "百度搜索词数据读取完成：%s；原始行 %s，命中 %s",
+            selected_date,
+            len(all_rows),
+            aggregate["matched_rows"],
+        )
+        return report
+    except BaiduReportApiError as exc:
+        if commit_attempt_report:
+            _write_attempt_report(
+                root,
+                config=config,
+                selected_date=selected_date,
+                period=None,
+                category=exc.category,
+                message=str(exc),
+            )
+        raise
+    except Exception as exc:
+        error = BaiduReportApiError("百度搜索词数据读取异常", category="api_error")
+        if commit_attempt_report:
+            _write_attempt_report(
+                root,
+                config=config,
+                selected_date=selected_date,
+                period=None,
+                category=error.category,
+                message=str(error),
+            )
+        raise error from exc
+
+
+def fetch_baidu_search_word_report(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token_cloud_first,
+    commit_standard_report: bool = True,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
+    task_context: dict[str, Any] | None = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    commit_attempt_report: bool = True,
+) -> dict[str, Any]:
+    selected_date = target_date or (
+        date.today().fromordinal(date.today().toordinal() - 1).isoformat()
+    )
+    output_path = _resolve_path(
+        root,
+        config.get("baidu", {}).get(
+            "search_word_output_path",
+            "reports/baidu_search_word_data.json",
+        ),
+    )
+    return _fetch_baidu_search_word_production(
+        config,
+        root,
+        logger,
+        selected_date=selected_date,
+        output_path=output_path,
+        token_provider=token_provider,
+        commit_standard_report=commit_standard_report,
+        commit_attempt_report=commit_attempt_report,
+        transport=transport,
+        task_context=task_context,
+        deadline=deadline,
+        clock=clock,
+    )

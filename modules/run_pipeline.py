@@ -15,14 +15,16 @@ from modules.console_ui import (
     print_write_summary,
 )
 from modules.data_merger import merge_daily_files, merge_data_files, normalize_period_for_report
-from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
+from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data, write_word_share_data
 from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
 from modules.kst_export_parser import auto_export_max_age_seconds, find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
 from modules.kst_local.source import (
+    fetch_kst_conversations,
     fetch_kst_local_daily_report,
     fetch_kst_local_report,
 )
 from modules.task_stop_gate import claim_excel_write, task_stop_requested
+from modules.baidu_report_api import fetch_baidu_search_word_report
 
 
 StepFunc = Callable[..., dict[str, Any]]
@@ -755,3 +757,321 @@ def run_daily_pipeline(
     from modules.console_ui import verbose_print
     verbose_print("报告：reports/daily_final_run_report.json")
     return _finalize_daily(root, report, logger)
+
+
+def _finalize_word_class(
+    root: Path,
+    report: dict[str, Any],
+    logger,
+) -> dict[str, Any]:
+    out_path = root / "reports" / "word_class_final_run_report.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(
+        "词类占比最终报告已输出：%s；结果：%s",
+        out_path,
+        "通过" if report.get("passed") else "失败",
+    )
+    return report
+
+
+def _merge_word_class_data(
+    root: Path,
+    config: dict[str, Any],
+    word_date: str,
+    baidu_report: dict[str, Any],
+    conversations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from modules.kst_daily_aggregation import aggregate_word_class_conversations
+
+    kst_agg = aggregate_word_class_conversations(conversations)
+    baidu_totals = baidu_report.get("totals") or {}
+    metrics = {
+        "点击": int(baidu_totals.get("click") or 0),
+        "消费": float(baidu_totals.get("cost") or 0),
+        "有效对话": int(kst_agg["counts"]["有效对话"]),
+        "有效转潜": int(kst_agg["counts"]["有效转潜"]),
+        "到诊": "",
+    }
+    merged = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": word_date,
+        "metrics": metrics,
+        "baidu": {
+            "raw_rows": baidu_report.get("raw_rows"),
+            "matched_rows": baidu_report.get("matched_rows"),
+            "keyword_counts": baidu_report.get("keyword_counts") or {},
+        },
+        "kst": kst_agg,
+        "errors": [],
+    }
+    reports_dir = root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "word_share_data.json").write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return merged
+
+
+def run_word_class_pipeline(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+    today: date | None = None,
+    fetch_search_word_func: StepFunc = fetch_baidu_search_word_report,
+    fetch_kst_func: Callable[..., dict[str, Any]] = fetch_kst_conversations,
+    write_func: StepFunc = write_word_share_data,
+) -> dict[str, Any]:
+    word_date = target_date or _default_yesterday(today)
+    excel_path = _resolve_path(root, config.get("excel_path"))
+
+    report: dict[str, Any] = {
+        "mode": "run-word-class",
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "passed": False,
+        "cancelled": False,
+        "failed_step": None,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": None,
+        "date": word_date,
+        "excel_path": str(excel_path or ""),
+        "metrics": {},
+        "baidu": {},
+        "kst": {},
+        "steps": [],
+        "write_summary": {
+            "write_count": 0,
+            "overwrite_count": 0,
+            "verification_passed": False,
+        },
+        "summary_text": "",
+        "outputs": {},
+        "errors": [],
+    }
+
+    def fail(step_name: str, errors: list[str]) -> dict[str, Any]:
+        report["failed_step"] = step_name
+        report["errors"].extend(errors)
+        report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        logger.error("词类占比流水线在步骤 %s 中断：%s", step_name, errors)
+        return _finalize_word_class(root, report, logger)
+
+    def stop_if_requested(boundary: str, claim_excel: bool = False) -> dict[str, Any] | None:
+        should_stop = (
+            not claim_excel_write(root, resolve_from_environment=True)
+            if claim_excel
+            else task_stop_requested(root)
+        )
+        if not should_stop:
+            return None
+        report["cancelled"] = True
+        report["failed_step"] = "cancelled-before-excel"
+        report["cancelled_at"] = boundary
+        report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        logger.info("用户停止词类占比任务：boundary=%s", boundary)
+        print("[停止] 已在词类占比 Excel 写入前安全停止", flush=True)
+        return _finalize_word_class(root, report, logger)
+
+    logger.info("词类占比流水线开始：date=%s", word_date)
+
+    stopped = stop_if_requested("before-baidu")
+    if stopped:
+        return stopped
+
+    print_step(1, 4, "读取百度搜索词报告")
+    try:
+        baidu_report = fetch_search_word_func(
+            config=config,
+            root=root,
+            logger=logger,
+            target_date=word_date,
+        )
+    except Exception as exc:
+        report["steps"].append(
+            _step_result("fetch-baidu-search-word", False, errors=[str(exc)])
+        )
+        print_step_failure(
+            "百度搜索词报告读取异常",
+            suggestion=str(exc),
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("fetch-baidu-search-word", [str(exc)])
+    baidu_errors = list(baidu_report.get("errors") or [])
+    report["baidu"] = {
+        "raw_rows": baidu_report.get("raw_rows"),
+        "matched_rows": baidu_report.get("matched_rows"),
+        "totals": baidu_report.get("totals") or {},
+        "keyword_counts": baidu_report.get("keyword_counts") or {},
+    }
+    report["steps"].append(
+        _step_result(
+            "fetch-baidu-search-word",
+            not baidu_errors,
+            outputs={
+                "baidu_search_word_data": str(
+                    root / "reports" / "baidu_search_word_data.json"
+                )
+            },
+            errors=baidu_errors,
+        )
+    )
+    if baidu_errors:
+        print_step_failure(
+            "百度搜索词报告读取未通过",
+            suggestion="；".join(baidu_errors),
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("fetch-baidu-search-word", baidu_errors)
+    print_step_success(
+        f"百度搜索词数据已读取（命中 {baidu_report.get('matched_rows')} 条）"
+    )
+    logger.info("词类占比步骤完成：fetch-baidu-search-word")
+
+    stopped = stop_if_requested("after-baidu")
+    if stopped:
+        return stopped
+
+    print_step(2, 4, "读取商务通访客对话")
+    try:
+        kst_result = fetch_kst_func(config, root, target_date=word_date)
+    except Exception as exc:
+        errors = [str(exc)]
+        report["steps"].append(
+            _step_result("fetch-kst-conversations", False, errors=errors)
+        )
+        print_step_failure(
+            "商务通对话读取异常",
+            suggestion=str(exc),
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("fetch-kst-conversations", errors)
+    conversations = kst_result.get("conversations") or []
+    report["kst"] = {"conversation_count": len(conversations)}
+    report["outputs"].update(kst_result.get("outputs", {}))
+    report["steps"].append(
+        _step_result(
+            "fetch-kst-conversations",
+            True,
+            outputs=kst_result.get("outputs", {}),
+        )
+    )
+    if kst_result.get("summary", {}).get("unavailable"):
+        print_step_success("商务通 API 不可用，对话已按 0 继续")
+    else:
+        print_step_success(f"商务通对话已读取（{len(conversations)} 条）")
+    logger.info("词类占比步骤完成：fetch-kst-conversations")
+
+    stopped = stop_if_requested("after-kst")
+    if stopped:
+        return stopped
+
+    print_step(3, 4, "合并词类占比数据")
+    try:
+        merged = _merge_word_class_data(
+            root,
+            config,
+            word_date,
+            baidu_report,
+            conversations,
+        )
+    except Exception as exc:
+        report["steps"].append(
+            _step_result("merge-word-class", False, errors=[str(exc)])
+        )
+        print_step_failure(
+            "词类占比数据合并异常",
+            suggestion=str(exc),
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("merge-word-class", [str(exc)])
+    report["metrics"] = merged["metrics"]
+    report["kst"] = merged["kst"]
+    report["steps"].append(
+        _step_result(
+            "merge-word-class",
+            True,
+            outputs={
+                "word_share_data": str(root / "reports" / "word_share_data.json")
+            },
+        )
+    )
+    print_step_success("词类占比数据已合并")
+    logger.info("词类占比步骤完成：merge-word-class")
+
+    stopped = stop_if_requested("before-excel", claim_excel=True)
+    if stopped:
+        return stopped
+
+    print_step(4, 4, "写入词类占比 Excel 并复核")
+    try:
+        write_report = write_func(
+            config=config,
+            root=root,
+            logger=logger,
+            target_date=word_date,
+        )
+    except Exception as exc:
+        report["steps"].append(
+            _step_result("write-word-share", False, errors=[str(exc)])
+        )
+        print_step_failure(
+            "词类占比 Excel 写入异常",
+            suggestion=str(exc),
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("write-word-share", [str(exc)])
+    write_errors = _errors_from_report(write_report)
+    verification_passed = bool(
+        write_report.get("self_check", {}).get("verification_passed")
+    )
+    write_passed = not write_errors and verification_passed
+    report["steps"].append(
+        _step_result(
+            "write-word-share",
+            write_passed,
+            outputs={
+                "word_share_write_report": str(
+                    root / "reports" / "word_share_write_report.json"
+                ),
+                "excel_path": write_report.get("excel_path"),
+                "backup_path": write_report.get("backup_path"),
+            },
+            errors=write_errors,
+        )
+    )
+    report["excel_path"] = str(
+        write_report.get("excel_path") or report["excel_path"]
+    )
+    report["backup_path"] = str(write_report.get("backup_path") or "")
+    report["write_summary"] = {
+        "write_count": len(write_report.get("writes", [])),
+        "overwrite_count": int(
+            write_report.get("overwrite_summary", {}).get("overwrite_count", 0) or 0
+        ),
+        "verification_passed": verification_passed,
+    }
+    if not write_passed:
+        errors = write_errors or ["词类占比 Excel 写入后复核未通过"]
+        print_step_failure(
+            "词类占比 Excel 写入复核未通过",
+            suggestion="请检查 word_share_write_report.json",
+            log_path=str(root / "logs" / "run.log"),
+        )
+        return fail("write-word-share", errors)
+    print_step_success("词类占比 Excel 写入完成，复核通过")
+    logger.info("词类占比步骤完成：write-word-share")
+
+    report["passed"] = True
+    report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    print_final_success(
+        f"词类占比已写入 {report['write_summary'].get('write_count', 0)} 个单元格，"
+        f"覆盖 {report['write_summary'].get('overwrite_count', 0)} 个已有值，复核通过"
+    )
+    return _finalize_word_class(root, report, logger)

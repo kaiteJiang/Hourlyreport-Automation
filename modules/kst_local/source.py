@@ -447,3 +447,119 @@ def fetch_kst_local_daily_report(
         "errors": [],
     }
     return _write_daily_result(root, payload, parse_report)
+
+
+def _write_conversations_result(
+    root: Path,
+    conversations: list[dict[str, Any]],
+    resolved_date: str,
+    *,
+    unavailable: bool = False,
+    reason: str = "",
+) -> dict[str, Any]:
+    reports_dir = root / "reports"
+    payload = {
+        "project_id": None,
+        "date": resolved_date,
+        "source": "kst_local_api_unavailable_zero" if unavailable else "kst_local_api",
+        "conversations": conversations,
+        "summary": {
+            "count": len(conversations),
+            "unavailable": unavailable,
+            "reason": reason if unavailable else "",
+        },
+    }
+    dialog_out = write_hourly_report(
+        payload,
+        reports_dir / "kst_conversations_data.json",
+    )
+    parse_report = {
+        "project_id": None,
+        "date": resolved_date,
+        "source": payload["source"],
+        "passed": True,
+        "summary": payload["summary"],
+        "warnings": [reason] if unavailable else [],
+        "errors": [],
+    }
+    parse_out = write_hourly_report(
+        parse_report,
+        reports_dir / "kst_conversations_parse_report.json",
+    )
+    return {
+        "conversations": conversations,
+        "summary": payload["summary"],
+        "outputs": {
+            "dialog_data": str(dialog_out),
+            "parse_report": str(parse_out),
+        },
+    }
+
+
+def fetch_kst_conversations(
+    config: dict[str, Any],
+    root: Path,
+    *,
+    target_date: str | None = None,
+    transport: Transport = _default_transport,
+) -> dict[str, Any]:
+    kst_config = config.get("kst", {}) or {}
+    base_url = _validate_loopback_url(
+        str(kst_config.get("local_api_url") or "http://127.0.0.1:18766")
+    )
+    resolved_date = target_date or default_daily_kst_date()
+    query = urllib.parse.urlencode(
+        {
+            "project_id": config.get("project_id") or "",
+            "date": resolved_date,
+        }
+    )
+    token_env = str(
+        kst_config.get("local_api_token_env") or "KST_LOCAL_API_TOKEN"
+    )
+    if token_env != "KST_LOCAL_API_TOKEN":
+        raise KstLocalSourceError(
+            "商务通本地 API 令牌变量必须为 KST_LOCAL_API_TOKEN"
+        )
+    token = load_or_create_local_token(root)
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    timeout = _local_api_timeout(kst_config)
+    try:
+        try:
+            payload = transport(
+                f"{base_url}/v1/kst/conversations?{query}",
+                headers,
+                timeout,
+            )
+        except KstLocalSourceError:
+            raise
+        except Exception:
+            raise KstLocalSourceError("商务通本地 API 请求失败") from None
+        if not isinstance(payload, dict):
+            raise KstLocalSourceError("商务通本地 API 对话响应结构不兼容")
+        if payload.get("source") != "kst_local_api":
+            raise KstLocalSourceError("商务通本地 API 对话响应来源不可信")
+        expected_project_id = str(config.get("project_id") or "")
+        if str(payload.get("project_id") or "") != expected_project_id:
+            raise KstLocalSourceError("商务通本地 API 对话响应项目不匹配")
+        if str(payload.get("date") or "") != resolved_date:
+            raise KstLocalSourceError("商务通本地 API 对话响应日期不匹配")
+        if payload.get("errors"):
+            raise KstLocalSourceError("商务通本地 API 对话返回校验错误")
+        conversations = payload.get("conversations")
+        if not isinstance(conversations, list):
+            raise KstLocalSourceError("商务通本地 API 对话响应缺少 conversations")
+    except KstLocalSourceError as exc:
+        if not bool(kst_config.get("allow_zero_on_unavailable")):
+            raise
+        safe_detail = _safe_failure_detail(exc.category)
+        return _write_conversations_result(
+            root,
+            [],
+            resolved_date,
+            unavailable=True,
+            reason=f"{safe_detail}，商务通对话指标已按 0 继续",
+        )
+    return _write_conversations_result(root, conversations, resolved_date)
