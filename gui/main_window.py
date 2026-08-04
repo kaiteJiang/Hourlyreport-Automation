@@ -4070,15 +4070,13 @@ class MainWindow(QMainWindow):
         if self.multi_project_execution_pending():
             return
         if self.runner.is_running() or self._task_active:
-            state = (
-                f"runner_running={self.runner.is_running()} "
-                f"task_active={self._task_active} "
-                f"task_type={self.current_task_type}"
-            )
             self.append_log(
-                f"[提示] 已有任务在执行或启动中（{state}），词类占比未启动。"
+                f"[提示] 检测到上一个词类任务状态未清除"
+                f"（runner={self.runner.is_running()} active={self._task_active}），"
+                f"正在重置后启动新任务。"
             )
-            return
+            self.runner.stop()
+            self._task_active = False
         date_text = self.selected_daily_date()
         selected_ids = self.project_combo.selected_project_ids()
         self._multi_task_active = self.project_combo.is_multi_mode()
