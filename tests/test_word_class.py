@@ -279,3 +279,9 @@ def test_build_word_class_command_shape():
     assert command[command.index("--date") + 1] == "2026-08-04"
     assert command[command.index("--project") + 1] == "kunming_niu"
     assert command[-1] == "--yes"
+
+
+def test_main_window_imports_build_word_class_command():
+    import gui.main_window as main_window
+
+    assert main_window.build_word_class_command is not None

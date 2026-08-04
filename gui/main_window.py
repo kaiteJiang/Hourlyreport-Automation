@@ -59,6 +59,7 @@ from gui.command_builder import (
     build_multi_daily_command,
     build_multi_hourly_command,
     build_preflight_command,
+    build_word_class_command,
 )
 from gui.desktop_pet import ClawdDesktopPet
 from gui.excel_open_settings import load_auto_open_excel, save_auto_open_excel
