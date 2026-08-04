@@ -791,7 +791,6 @@ def _merge_word_class_data(
     keywords = word_class_keywords_for_name(config.get("project_name"))
     kst_agg = aggregate_word_class_conversations(conversations, keywords)
 
-    kst_agg = aggregate_word_class_conversations(conversations)
     baidu_totals = baidu_report.get("totals") or {}
     metrics = {
         "点击": int(baidu_totals.get("click") or 0),

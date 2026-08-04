@@ -4532,12 +4532,23 @@ class MainWindow(QMainWindow):
         for item in payload.get("projects") or []:
             if not isinstance(item, dict) or item.get("status") != "success":
                 continue
-            value = str(item.get("excel_path") or "").strip()
-            if not value:
-                continue
-            path = Path(value)
-            if not path.is_absolute():
-                path = self.root / path
+            if self.current_task_type == "word_class":
+                try:
+                    project_id = str(item.get("project_id") or "")
+                    project = load_project_config(self.root, project_id)
+                    date_text = self.selected_daily_date()
+                    year = date_text[:4] if date_text else str(date.today().year)
+                    path = get_word_share_path(project, year, self.root)
+                except Exception as exc:
+                    self.append_log(f"任务完成，但读取词类占比路径失败：{exc}")
+                    continue
+            else:
+                value = str(item.get("excel_path") or "").strip()
+                if not value:
+                    continue
+                path = Path(value)
+                if not path.is_absolute():
+                    path = self.root / path
             key = os.path.normcase(os.path.abspath(path))
             if key in seen:
                 continue
