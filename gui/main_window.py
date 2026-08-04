@@ -4068,6 +4068,9 @@ class MainWindow(QMainWindow):
     def run_word_class(self) -> None:
         if self.multi_project_execution_pending():
             return
+        if self.runner.is_running() or self._task_active:
+            self.append_log("[提示] 已有任务在执行或启动中，词类占比未启动。请等待当前任务结束后重试。")
+            return
         date_text = self.selected_daily_date()
         command = build_word_class_command(
             self.root,
