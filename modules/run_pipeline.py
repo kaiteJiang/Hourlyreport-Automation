@@ -992,7 +992,7 @@ def run_word_class_pipeline(
             print_step_success(f"商务通对话已读取（{len(conversations)} 条）")
         logger.info("词类占比步骤完成：%s", kst_step_name)
     else:
-        from modules.kst_daily_aggregation import flatten_daily_export_conversations
+        from modules.kst_daily_aggregation import export_rows_to_word_class_conversations
 
         if export_file is None:
             conversations = []
@@ -1003,8 +1003,10 @@ def run_word_class_pipeline(
             print_step_success("未找到 30 分钟内的商务通导出文件，已按 0 对话处理")
             logger.info("词类占比步骤完成：%s；未找到导出文件", kst_step_name)
         else:
+            from modules.kst_daily_parser import parse_word_class_export
+
             try:
-                kst_result = parse_kst_daily_file(
+                kst_result = parse_word_class_export(
                     export_file,
                     config,
                     root,
@@ -1034,11 +1036,8 @@ def run_word_class_pipeline(
                     log_path=str(root / "logs" / "run.log"),
                 )
                 return fail(kst_step_name, parse_errors)
-            conversations = flatten_daily_export_conversations(
-                kst_result.get("account_dialog_details") or {}
-            )
+            conversations = kst_result.get("conversations") or []
             report["kst"] = {"conversation_count": len(conversations)}
-            report["outputs"].update(kst_result.get("outputs", {}))
             report["steps"].append(
                 _step_result(
                     kst_step_name,

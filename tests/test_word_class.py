@@ -132,14 +132,15 @@ def test_aggregate_word_class_conversations_counts_valid_and_lead():
     assert result["keyword_counts"] == {"银屑病": 3, "牛皮癣": 2}
 
 
-def test_aggregate_word_class_conversations_falls_back_to_bid_word():
+def test_aggregate_word_class_conversations_does_not_match_bid_word():
     conversations = [
         {"keyword": "", "bid_word": "牛皮癣", "tags": ["有效-三句"]},
         {"keyword": "银屑病", "bid_word": "无关", "tags": ["转潜-有效"]},
     ]
     result = aggregate_word_class_conversations(conversations)
-    assert result["matched_conversations"] == 2
-    assert result["counts"]["有效对话"] == 2
+    # 只按搜索关键词匹配,竞价词命中不算
+    assert result["matched_conversations"] == 1
+    assert result["counts"]["有效对话"] == 1
     assert result["counts"]["有效转潜"] == 1
 
 
@@ -290,40 +291,23 @@ def test_main_window_imports_build_word_class_command():
 
 # ---- 人工导出模式 ----
 
-def test_flatten_daily_export_conversations_maps_search_word_and_tag():
-    from modules.kst_daily_aggregation import flatten_daily_export_conversations
+def test_export_rows_to_word_class_conversations_maps_search_word_and_tag():
+    from modules.kst_daily_aggregation import export_rows_to_word_class_conversations
 
-    details = {
-        "银康01": [
-            {
-                "search_word": "银屑病怎么治",
-                "tag": "有效-三句",
-                "visitor_messages": 2,
-                "dialog_time": "2026-08-03 09:00:00",
-            },
-            {
-                "search_word": "痘痘",
-                "tag": None,
-                "visitor_messages": 1,
-                "dialog_time": "2026-08-03 10:00:00",
-            },
-            {
-                "search_word": None,
-                "tag": "",
-                "visitor_messages": 0,
-                "dialog_time": None,
-            },
-        ]
-    }
-    convs = flatten_daily_export_conversations(details)
+    rows = [
+        {"搜索关键词": "银屑病怎么治", "名片标签": "有效-三句", "访客消息数": 2},
+        {"搜索关键词": "痘痘", "名片标签": None, "访客消息数": 1},
+        {"搜索关键词": "银屑病", "名片标签": "", "访客消息数": 0},
+        {"搜索关键词": "牛皮癣", "名片标签": "转潜-有效", "访客消息数": 3},
+    ]
+    convs = export_rows_to_word_class_conversations(rows)
     assert len(convs) == 3
     assert convs[0]["keyword"] == "银屑病怎么治"
-    assert convs[0]["bid_word"] == "银屑病怎么治"
     assert convs[0]["tags"] == ["有效-三句"]
-    assert convs[0]["visitor_messages"] == 2
     assert convs[1]["tags"] == []
-    assert convs[2]["keyword"] == ""
-    assert convs[2]["tags"] == []
+    assert convs[2]["tags"] == ["转潜-有效"]
+    # 无访客消息的行被排除
+    assert all(conv["keyword"] != "银屑病" for conv in convs)
 
 
 def test_fetch_baidu_search_word_project_single_source(monkeypatch):
@@ -452,30 +436,25 @@ def test_run_word_class_pipeline_export_branch(monkeypatch, tmp_path):
         "excel_path": str(tmp_path / "竞价.xlsx"),
         "kst": {"data_source": "export"},
     }
-    details = {
-        "银康01": [
-            {
-                "search_word": "银屑病怎么治",
-                "tag": "有效-三句",
-                "visitor_messages": 2,
-                "dialog_time": "2026-08-03 09:00:00",
-            },
-            {
-                "search_word": "牛皮癣",
-                "tag": "无效",
-                "visitor_messages": 1,
-                "dialog_time": "2026-08-03 10:00:00",
-            },
-        ]
-    }
 
     def fake_find_export(root, config):
         return tmp_path / "商务通日报.xlsx"
 
     def fake_parse(file_path, config, root, target_date):
         return {
-            "parse_report": {"passed": True, "errors": []},
-            "account_dialog_details": details,
+            "parse_report": {"passed": True, "errors": [], "row_count": 2},
+            "conversations": [
+                {
+                    "keyword": "银屑病怎么治",
+                    "tags": ["有效-三句"],
+                    "visitor_messages": 2,
+                },
+                {
+                    "keyword": "牛皮癣",
+                    "tags": ["无效"],
+                    "visitor_messages": 1,
+                },
+            ],
             "outputs": {},
         }
 
@@ -499,7 +478,7 @@ def test_run_word_class_pipeline_export_branch(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr("modules.run_pipeline.find_latest_kst_export", fake_find_export)
-    monkeypatch.setattr("modules.run_pipeline.parse_kst_daily_file", fake_parse)
+    monkeypatch.setattr("modules.kst_daily_parser.parse_word_class_export", fake_parse)
     monkeypatch.setattr("modules.run_pipeline.write_word_share_data", fake_write)
     monkeypatch.setattr(
         "modules.run_pipeline.fetch_baidu_search_word_project", fake_search_word

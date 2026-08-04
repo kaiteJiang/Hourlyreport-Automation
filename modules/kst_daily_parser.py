@@ -11,6 +11,7 @@ from modules.kst_daily_aggregation import (
     default_daily_kst_date,
     empty_daily_kst_account_row,
     empty_daily_kst_accounts,
+    export_rows_to_word_class_conversations,
 )
 from modules.kst_export_parser import (
     SUPPORTED_SUFFIXES,
@@ -212,4 +213,63 @@ def parse_kst_daily_file(file_path: str | Path, config: dict[str, Any], root: Pa
             "unmatched_rows": str(unmatched_out),
             "account_dialog_details": str(details_out),
         },
+    }
+
+
+def parse_word_class_export(
+    file_path: str | Path,
+    config: dict[str, Any],
+    root: Path,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """词类占比专用的商务通导出解析:按日期取对话,不做账户归属。
+
+    词类占比是整项目统计,不需要账户映射。直接读导出文件,校验搜索关键词
+    与名片标签字段,按目标日期过滤后转为词类占比聚合所需结构。
+    """
+    path = _resolve_path(root, file_path)
+    target = target_date or default_daily_kst_date()
+    errors: list[str] = []
+
+    if not path.exists():
+        errors.append(f"商务通日报导出文件不存在：{path}")
+    elif path.suffix.lower() not in SUPPORTED_SUFFIXES:
+        errors.append(f"不支持的商务通日报导出文件类型：{path.suffix}")
+    else:
+        rows = read_export_rows(path)
+        if not rows:
+            errors.append("商务通日报导出文件为空")
+        else:
+            field_info = _inspect_daily_fields(rows)
+            if not field_info["has_search_word"]:
+                errors.append("未识别到搜索关键词/搜索词字段")
+            if not field_info["has_tag"]:
+                errors.append("未识别到名片标签/对话标签字段")
+            if not field_info["has_dialog_time"]:
+                errors.append("未识别到对话时间字段，无法按日报日期统计")
+            if not errors:
+                included, _ = _filter_rows_by_date(rows, target)
+            else:
+                included = []
+
+    parse_report = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": target,
+        "source": "kst_daily_export_word_class",
+        "export_file": str(path),
+        "passed": not errors,
+        "errors": errors,
+        "row_count": len(included) if not errors else 0,
+    }
+    if errors:
+        return {
+            "conversations": [],
+            "parse_report": parse_report,
+            "outputs": {},
+        }
+    return {
+        "conversations": export_rows_to_word_class_conversations(included),
+        "parse_report": parse_report,
+        "outputs": {},
     }

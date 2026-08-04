@@ -178,8 +178,9 @@ def aggregate_word_class_conversations(
     conversations: list[dict[str, Any]],
     keywords: tuple[str, ...] = ("银屑病", "牛皮癣"),
 ) -> dict[str, Any]:
-    """筛选搜索关键词(回退竞价词)含关键字的对话,统计词类占比指标。
+    """按"搜索关键词"筛选含关键字的对话,统计词类占比指标。
 
+    只匹配搜索关键词(keyword),不匹配竞价词,避免竞价词命中把无关对话算进来。
     有效对话 = 关键词命中 且 标签含"有效"二字(含"有效-一般");
     有效转潜 = 关键词命中 且 标签含"转潜-有效"(有效转潜 ⊆ 有效对话)。
     """
@@ -189,7 +190,7 @@ def aggregate_word_class_conversations(
     for conv in conversations:
         if not isinstance(conv, dict):
             continue
-        text = f"{conv.get('keyword') or ''} {conv.get('bid_word') or ''}".strip()
+        text = str(conv.get("keyword") or "").strip()
         if not any(keyword in text for keyword in keywords):
             continue
         matched_conversations += 1
@@ -211,26 +212,34 @@ def aggregate_word_class_conversations(
     }
 
 
-def flatten_daily_export_conversations(
-    details: dict[str, list[dict[str, Any]]],
+def export_rows_to_word_class_conversations(
+    rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """把日报导出解析的 account_dialog_details 扁平化为词类占比聚合所需结构。
+    """把导出文件按日期过滤后的原始行转为词类占比聚合所需结构。
 
-    与日报共用同一份导出的商务通对话表:每条对话的 search_word 即搜索关键词,
-    tag 即名片标签。
+    词类占比是整项目统计,不需要账户归属;直接取每行的"搜索关键词"和
+    "名片标签",与日报共用同一份导出的商务通对话表。仅保留有访客消息
+    (访客消息数 >= 1)的对话,与日报"访客对话"口径一致。
     """
     conversations: list[dict[str, Any]] = []
-    for items in details.values():
-        for item in items:
-            search_word = str(item.get("search_word") or "").strip()
-            tag = item.get("tag")
-            conversations.append(
-                {
-                    "keyword": search_word,
-                    "bid_word": search_word,
-                    "tags": [str(tag)] if tag not in (None, "") else [],
-                    "visitor_messages": item.get("visitor_messages"),
-                    "start_time": item.get("dialog_time"),
-                }
-            )
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        search_word = str(pick_value(row, SEARCH_WORD_KEYS) or "").strip()
+        if not search_word:
+            continue
+        visitor_messages = pick_value(row, VISITOR_MESSAGE_KEYS)
+        try:
+            if int(visitor_messages or 0) < 1:
+                continue
+        except (TypeError, ValueError):
+            continue
+        tag = pick_value(row, TAG_KEYS)
+        conversations.append(
+            {
+                "keyword": search_word,
+                "tags": [str(tag)] if tag not in (None, "") else [],
+                "visitor_messages": visitor_messages,
+            }
+        )
     return conversations
