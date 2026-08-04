@@ -48,3 +48,8 @@ samples/*
 _verify_excel.py
 .ignore
 nul
+
+# 营销视频制作工程（独立项目，不纳入主仓库）
+promo_video/
+promo_video_scaffold/
+promo_video_shotcraft/
