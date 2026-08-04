@@ -809,6 +809,7 @@ def _fetch_baidu_search_word_production(
     task_context: dict[str, Any] | None,
     deadline: float | None,
     clock: Callable[[], float],
+    keywords: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     started_at = datetime.now().isoformat(timespec="seconds")
     context = task_context if isinstance(task_context, dict) else {}
@@ -914,7 +915,7 @@ def _fetch_baidu_search_word_production(
                 break
             start_row += len(rows)
 
-        aggregate = aggregate_search_word_rows(all_rows)
+        aggregate = aggregate_search_word_rows(all_rows, keywords or WORD_CLASS_KEYWORDS)
         report: dict[str, Any] = {
             "project_id": config.get("project_id"),
             "project_name": config.get("project_name"),
@@ -993,6 +994,7 @@ def fetch_baidu_search_word_report(
     deadline: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     commit_attempt_report: bool = True,
+    keywords: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     selected_date = target_date or (
         date.today().fromordinal(date.today().toordinal() - 1).isoformat()
@@ -1017,6 +1019,7 @@ def fetch_baidu_search_word_report(
         task_context=task_context,
         deadline=deadline,
         clock=clock,
+        keywords=keywords,
     )
 
 
@@ -1030,16 +1033,18 @@ def fetch_baidu_search_word_project(
     task_context: dict[str, Any] | None = None,
     deadline: float | None = None,
     clock: Callable[[], float] = time.monotonic,
+    keywords: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """按项目(含多来源)拉取搜索词报告并聚合。
 
     单来源项目用顶层 baidu.api_profile;多来源项目逐 source 用各自的
     api_profile+账户拉取后合并原始行一次聚合。任一 source 缺授权即报错。
+    keywords 缺省时按项目名区分:带"白"=白癜风,否则=银屑病/牛皮癣。
     """
-    from modules.baidu_multi_source import (
-        build_source_runtime_config,
-        resolve_baidu_sources,
-    )
+    if keywords is None:
+        from modules.project_config import word_class_keywords_for_name
+
+        keywords = word_class_keywords_for_name(config.get("project_name"))
 
     resolved_date = target_date or (
         date.today().fromordinal(date.today().toordinal() - 1).isoformat()
@@ -1062,6 +1067,7 @@ def fetch_baidu_search_word_project(
             task_context=task_context,
             deadline=deadline,
             clock=clock,
+            keywords=keywords,
         )
 
     from modules.baidu_multi_source import (
@@ -1103,6 +1109,7 @@ def fetch_baidu_search_word_project(
                 task_context=task_context,
                 deadline=deadline,
                 clock=clock,
+                keywords=keywords,
             )
         except BaiduReportApiError as exc:
             source_errors.append(f"{source_name}：{exc}")
@@ -1114,7 +1121,7 @@ def fetch_baidu_search_word_project(
             if action not in actions:
                 actions.append(action)
 
-    aggregate = aggregate_search_word_rows(all_rows)
+    aggregate = aggregate_search_word_rows(all_rows, keywords)
     report: dict[str, Any] = {
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),

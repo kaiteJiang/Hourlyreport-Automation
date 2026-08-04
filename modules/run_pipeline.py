@@ -786,6 +786,10 @@ def _merge_word_class_data(
     conversations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     from modules.kst_daily_aggregation import aggregate_word_class_conversations
+    from modules.project_config import word_class_keywords_for_name
+
+    keywords = word_class_keywords_for_name(config.get("project_name"))
+    kst_agg = aggregate_word_class_conversations(conversations, keywords)
 
     kst_agg = aggregate_word_class_conversations(conversations)
     baidu_totals = baidu_report.get("totals") or {}

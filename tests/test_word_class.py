@@ -387,10 +387,10 @@ def test_fetch_baidu_search_word_project_multi_source(monkeypatch):
         profile = source_config["baidu"]["api_profile"]
         if profile == "a_baidu":
             return {"search_word_rows": [
-                {"queryWord": "牛皮癣", "click": 3, "cost": 1.0, "impression": 5}
+                {"queryWord": "白癜风怎么治", "click": 3, "cost": 1.0, "impression": 5}
             ], "diagnostics": {"api_request_count": 1, "self_heal_actions": []}}
         return {"search_word_rows": [
-            {"queryWord": "银屑病", "click": 4, "cost": 2.0, "impression": 6}
+            {"queryWord": "白斑", "click": 4, "cost": 2.0, "impression": 6}
         ], "diagnostics": {"api_request_count": 1, "self_heal_actions": []}}
 
     monkeypatch.setattr(
@@ -398,10 +398,21 @@ def test_fetch_baidu_search_word_project_multi_source(monkeypatch):
     )
     root = Path(tempfile.mkdtemp())
     report = fetch_baidu_search_word_project(config, root, _NullLogger(), target_date="2026-08-03")
-    assert report["matched_rows"] == 2
-    assert report["totals"]["click"] == 7
-    assert report["totals"]["cost"] == 3.0
+    # 沈阳白是白(白癜风)项目,只筛"白癜风"
+    assert report["matched_rows"] == 1
+    assert report["totals"]["click"] == 3
+    assert report["totals"]["cost"] == 1.0
     assert report["errors"] == []
+
+
+def test_word_class_keywords_by_project_name():
+    from modules.project_config import word_class_keywords_for_name
+
+    assert word_class_keywords_for_name("昆明牛") == ("银屑病", "牛皮癣")
+    assert word_class_keywords_for_name("长沙牛") == ("银屑病", "牛皮癣")
+    assert word_class_keywords_for_name("沈阳白") == ("白癜风",)
+    assert word_class_keywords_for_name("青岛白") == ("白癜风",)
+    assert word_class_keywords_for_name(None) == ("银屑病", "牛皮癣")
 
 
 def test_fetch_baidu_search_word_project_missing_api_profile(monkeypatch):

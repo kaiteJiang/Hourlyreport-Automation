@@ -331,6 +331,13 @@ def get_word_share_sheet(project: dict[str, Any]) -> str:
     )
 
 
+def word_class_keywords_for_name(project_name: str | None) -> tuple[str, ...]:
+    name = str(project_name or "").strip()
+    if "白" in name:
+        return ("白癜风",)
+    return ("银屑病", "牛皮癣")
+
+
 def get_hourly_sheet(project: dict[str, Any]) -> str:
     return str(normalize_project_config(project)["excel"].get("hourly_sheet") or "时段数据")
 
