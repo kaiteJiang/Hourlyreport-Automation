@@ -1676,6 +1676,7 @@ class MainWindow(QMainWindow):
         self._task_stop_requested = False
         self._task_stop_locked = False
         self._task_active = False
+        self._pending_restart: tuple[str, list[str], str] | None = None
         self._task_observed_stage = ""
         self._task_last_output_at = 0.0
         self._task_output_warning_sent = False
@@ -4069,14 +4070,6 @@ class MainWindow(QMainWindow):
     def run_word_class(self) -> None:
         if self.multi_project_execution_pending():
             return
-        if self.runner.is_running() or self._task_active:
-            self.append_log(
-                f"[提示] 检测到上一个词类任务状态未清除"
-                f"（runner={self.runner.is_running()} active={self._task_active}），"
-                f"正在重置后启动新任务。"
-            )
-            self.runner.stop()
-            self._task_active = False
         date_text = self.selected_daily_date()
         selected_ids = self.project_combo.selected_project_ids()
         self._multi_task_active = self.project_combo.is_multi_mode()
@@ -4090,12 +4083,30 @@ class MainWindow(QMainWindow):
                 project_id=self.selected_project_id(),
             )
             subtitle = f"{self.selected_project_name()} {self.display_daily_date()}"
+        if self.runner.is_running() or self._task_active:
+            self.append_log(
+                f"[提示] 检测到上一个词类任务状态未清除"
+                f"（runner={self.runner.is_running()} active={self._task_active}），"
+                f"正在停止旧任务，完成后自动启动新任务。"
+            )
+            self._pending_restart = ("词类占比执行中", command, subtitle)
+            self._task_active = False
+            self.runner.stop()
+            QTimer.singleShot(5000, self._on_restart_timeout)
+            return
         self.set_current_flow("word_class", "词类占比", subtitle, "运行中")
         if self._multi_task_active:
             self.current_project_name = "、".join(self.selected_project_names())
         self._last_pet_event = ""
         self.desktop_pet.announce(f"{subtitle}词类占比正在统计。", "running")
         self.start_command("词类占比执行中", command)
+
+    def _on_restart_timeout(self) -> None:
+        if self._pending_restart is not None:
+            self._pending_restart = None
+            self.append_log("[警告] 旧任务停止超时（5秒），已放弃自动重启，请手动重试。")
+            self.set_task_buttons_enabled(True)
+            self.set_data_source_control_locked(False)
 
     def run_environment_preflight(self, allow_multi: bool = False) -> None:
         self.run_preflight("hourly", allow_multi=allow_multi)
@@ -4256,6 +4267,17 @@ class MainWindow(QMainWindow):
         self.set_data_source_control_locked(False)
         self._task_stop_locked = True
         self.set_stop_controls()
+        if self._pending_restart is not None:
+            title, command, subtitle = self._pending_restart
+            self._pending_restart = None
+            self.append_log(f"旧任务已停止（退出码 {exit_code}），正在启动新任务…")
+            self.set_current_flow("word_class", "词类占比", subtitle, "运行中")
+            if self._multi_task_active:
+                self.current_project_name = "、".join(self.selected_project_names())
+            self._last_pet_event = ""
+            self.desktop_pet.announce(f"{subtitle}词类占比正在统计。", "running")
+            self.start_command(title, command)
+            return
         if exit_code == 0 and self._multi_task_active:
             self.finish_multi_project_task()
             self._task_stop_requested = False
