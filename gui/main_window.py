@@ -4070,7 +4070,14 @@ class MainWindow(QMainWindow):
         if self.multi_project_execution_pending():
             return
         if self.runner.is_running() or self._task_active:
-            self.append_log("[提示] 已有任务在执行或启动中，词类占比未启动。请等待当前任务结束后重试。")
+            state = (
+                f"runner_running={self.runner.is_running()} "
+                f"task_active={self._task_active} "
+                f"task_type={self.current_task_type}"
+            )
+            self.append_log(
+                f"[提示] 已有任务在执行或启动中（{state}），词类占比未启动。"
+            )
             return
         date_text = self.selected_daily_date()
         selected_ids = self.project_combo.selected_project_ids()
