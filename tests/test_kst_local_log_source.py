@@ -310,3 +310,120 @@ def test_identity_ids_only_use_current_structured_formal_log_values(
         "2026-07-31",
         {"10001", "20001", "30001"},
     ) == {"10001"}
+
+
+def test_log_snapshot_tracks_realtime_new_visitor_msg_type_9(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        "\n".join(
+            [
+                (
+                    '[2026-08-03 09:00:00] [Pack] Handler '
+                    '{"msgType":9,"msgContent":{"baseRecId":501,'
+                    '"baseVisitorId":"abc","baseVisitorName":"访客"}}'
+                ),
+                (
+                    '[2026-08-03 09:00:01] [Pack] Handler '
+                    '{"msgType":9,"msgContent":{"recId":502,'
+                    '"curStatus":1}}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-08-03")
+
+    assert snapshot.sources_by_rec_id["501"] == frozenset(
+        {"websocket_msg_type_9"}
+    )
+    assert snapshot.sources_by_rec_id["502"] == frozenset(
+        {"websocket_msg_type_9"}
+    )
+
+
+def test_log_snapshot_tracks_realtime_visitor_info_msg_type_452(
+    tmp_path: Path,
+):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        (
+            '[2026-08-03 09:00:00] [Pack] Handler '
+            '{"msgType":452,"msgContent":{"recId":601,"info":"推广ID：72828178"}}'
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-08-03")
+
+    assert snapshot.sources_by_rec_id["601"] == frozenset(
+        {"websocket_msg_type_452"}
+    )
+
+
+def test_log_snapshot_date_gates_realtime_sources(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        "\n".join(
+            [
+                (
+                    '[2026-08-03 09:00:00] [Pack] Handler '
+                    '{"msgType":9,"msgContent":{"baseRecId":501}}'
+                ),
+                (
+                    '[2026-08-02 09:00:00] [Pack] Handler '
+                    '{"msgType":9,"msgContent":{"baseRecId":701}}'
+                ),
+                (
+                    '[2026-08-02 09:00:01] [Pack] Handler '
+                    '{"msgType":452,"msgContent":{"recId":702}}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-08-03")
+
+    assert set(snapshot.sources_by_rec_id) == {"501"}
+    assert "701" not in snapshot.sources_by_rec_id
+    assert "702" not in snapshot.sources_by_rec_id
+
+
+def test_log_snapshot_does_not_track_unrelated_message_types(
+    tmp_path: Path,
+):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app.log").write_text(
+        "\n".join(
+            [
+                (
+                    '[2026-08-03 09:00:00] [Pack] Handler '
+                    '{"msgType":13,"msgContent":"track jump"}'
+                ),
+                (
+                    '[2026-08-03 09:00:01] [Pack] Handler '
+                    '{"msgType":30,"msgContent":"robot reply"}'
+                ),
+                (
+                    '[2026-08-03 09:00:02] [Pack] Handler '
+                    '{"msgType":9,"msgContent":{"recId":99999,'
+                    '"otherRecId":88888}}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = parse_log_snapshot(log_dir, "2026-08-03")
+
+    assert set(snapshot.sources_by_rec_id) == {"99999"}
+    # msgType 9 行里必须取访客自身的 recId，而不是其它字段里的数字
+    assert snapshot.sources_by_rec_id["99999"] == frozenset(
+        {"websocket_msg_type_9"}
+    )
+

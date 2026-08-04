@@ -16,6 +16,14 @@ PUSH_BATCH_PATTERN = re.compile(
 )
 PUSH_REC_ID_PATTERN = re.compile(r'(?<!\d)\d+(?!\d)')
 SYNC_REC_ID_PATTERN = re.compile(r'\\?"recId\\?"\s*:\s*\\?"?(\d+)')
+# 实时新访客进入（msgType 9）与访客信息推送（msgType 452）也会把访客写进
+# 本地缓存，必须纳入自动来源白名单，否则这些对话在 collect() 阶段会被过滤掉。
+PUSH_MSG9_REC_ID_PATTERN = re.compile(
+    r'"msgType"\s*:\s*9\b.*?"(?:baseRecId|recId)"\s*:\s*(\d+)'
+)
+PUSH_MSG452_REC_ID_PATTERN = re.compile(
+    r'"msgType"\s*:\s*452\b.*?"recId"\s*:\s*(\d+)'
+)
 TAG_PAIR_PATTERN = re.compile(
     r'"typeid"\s*:\s*"?(\d+)"?.*?"typename"\s*:\s*"([^"]+)"'
 )
@@ -55,6 +63,16 @@ class _SnapshotAccumulator:
                     self.sources.setdefault(rec_id, set()).add(
                         "websocket_msg_type_48"
                     )
+            match_msg9 = PUSH_MSG9_REC_ID_PATTERN.search(line)
+            if match_msg9:
+                self.sources.setdefault(match_msg9.group(1), set()).add(
+                    "websocket_msg_type_9"
+                )
+            match_msg452 = PUSH_MSG452_REC_ID_PATTERN.search(line)
+            if match_msg452:
+                self.sources.setdefault(match_msg452.group(1), set()).add(
+                    "websocket_msg_type_452"
+                )
 
         if ENDPOINT_SUFFIXES["startup_sync"] in line:
             for match in SYNC_REC_ID_PATTERN.finditer(line):
