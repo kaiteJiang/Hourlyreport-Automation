@@ -142,7 +142,7 @@ def test_service_builds_daily_report_from_automatic_conversations():
     assert report["summary"]["automatic_rows"] == 1
 
 
-def test_service_fails_instead_of_turning_query_failure_into_zero():
+def test_service_falls_back_to_local_candidate_when_visitor_query_fails():
     service = KstConversationService(
         config=_config(),
         snapshot=_snapshot(),
@@ -150,12 +150,35 @@ def test_service_fails_instead_of_turning_query_failure_into_zero():
         client=FakeClient(failing_rec_id="101"),
     )
 
-    try:
+    conversations = service.collect("2026-07-27")
+
+    assert [item.rec_id for item in conversations] == ["101"]
+    # 云端富化失败时回退到本地候选数据：开始时间、推广ID、访客消息数均来自候选
+    assert conversations[0].start_time == "2026-07-27 08:59:58"
+    assert conversations[0].promotion_id == "72828178"
+    assert conversations[0].visitor_messages == 1
+    assert conversations[0].keyword == "测试词"
+
+
+def test_service_still_raises_when_visitor_query_fails_and_local_data_invalid():
+    candidates = [
+        KstCacheCandidate(
+            rec_id="101",
+            start_time="2026-07-27 08:59:58",
+            promotion_id="99999999",
+            visitor_messages=1,
+        )
+    ]
+
+    service = KstConversationService(
+        config=_config(),
+        snapshot=_snapshot(),
+        candidates=candidates,
+        client=FakeClient(failing_rec_id="101"),
+    )
+
+    with pytest.raises(KstServiceError, match="101"):
         service.collect("2026-07-27")
-    except KstServiceError as exc:
-        assert "101" in str(exc)
-    else:
-        raise AssertionError("KstServiceError was not raised")
 
 
 def test_service_rejects_automatic_conversation_outside_project_mapping():
@@ -300,7 +323,7 @@ def test_parallel_failure_does_not_cache_partial_results():
         KstCacheCandidate(
             rec_id="202",
             start_time="2026-07-27 09:00:00",
-            promotion_id="72828179",
+            promotion_id="99999999",
             visitor_messages=1,
         ),
     ]

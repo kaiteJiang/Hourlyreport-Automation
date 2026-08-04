@@ -110,41 +110,22 @@ class KstConversationService:
         allowed: dict[str, frozenset[str]],
         promotion_map: dict[str, str],
     ) -> KstConversation:
-        try:
-            endpoint_names = set(self._snapshot.auth.endpoints)
-            database_fallback = (
-                not {
-                    "visitor_info",
-                    "visitor_card",
-                }.issubset(endpoint_names)
-                and "tag_dictionary" in endpoint_names
+        endpoint_names = set(self._snapshot.auth.endpoints)
+        database_fallback = (
+            not {
+                "visitor_info",
+                "visitor_card",
+            }.issubset(endpoint_names)
+            and "tag_dictionary" in endpoint_names
+        )
+        if database_fallback:
+            return self._from_candidate(
+                candidate,
+                tag_map,
+                allowed,
+                promotion_map,
             )
-            if database_fallback:
-                start_time = candidate.start_time
-                visitor_messages = int(candidate.visitor_messages or 0)
-                promotion_id = candidate.promotion_id
-                if not start_time:
-                    raise ValueError("start time missing")
-                if not promotion_id:
-                    raise ValueError("promotion id missing")
-                if promotion_id not in promotion_map:
-                    raise ValueError(
-                        "promotion id outside project mapping"
-                    )
-                tags = tuple(
-                    tag_map.get(tag_id, tag_id)
-                    for tag_id in _tag_ids(candidate.tag_ids)
-                )
-                return KstConversation(
-                    rec_id=candidate.rec_id,
-                    start_time=start_time,
-                    promotion_id=promotion_id,
-                    visitor_messages=visitor_messages,
-                    tags=tags,
-                    sources=allowed[candidate.rec_id],
-                    keyword=candidate.keyword,
-                    bid_word=candidate.bid_word,
-                )
+        try:
             visitor = self._client.load_visitor(candidate.rec_id)
             visitor_id = str(visitor.get("visitorId") or "")
             if not visitor_id:
@@ -187,9 +168,51 @@ class KstConversationService:
                 bid_word=candidate.bid_word,
             )
         except Exception:
+            # 云端富化失败（如访客记录尚未落到云端访客库）时，回退到本地
+            # 候选数据，避免单条会话把整份小时报/日报拖垮。
+            return self._from_candidate(
+                candidate,
+                tag_map,
+                allowed,
+                promotion_map,
+            )
+
+    def _from_candidate(
+        self,
+        candidate: KstCacheCandidate,
+        tag_map: dict[str, str],
+        allowed: dict[str, frozenset[str]],
+        promotion_map: dict[str, str],
+    ) -> KstConversation:
+        start_time = candidate.start_time
+        visitor_messages = int(candidate.visitor_messages or 0)
+        promotion_id = candidate.promotion_id
+        if not start_time:
             raise KstServiceError(
-                f"自动来源会话查询失败：recId={candidate.rec_id}"
-            ) from None
+                f"自动来源会话查询失败：recId={candidate.rec_id}（缺少开始时间）"
+            )
+        if not promotion_id:
+            raise KstServiceError(
+                f"自动来源会话查询失败：recId={candidate.rec_id}（缺少推广ID）"
+            )
+        if promotion_id not in promotion_map:
+            raise KstServiceError(
+                f"自动来源会话查询失败：recId={candidate.rec_id}（推广ID不在项目映射）"
+            )
+        tags = tuple(
+            tag_map.get(tag_id, tag_id)
+            for tag_id in _tag_ids(candidate.tag_ids)
+        )
+        return KstConversation(
+            rec_id=candidate.rec_id,
+            start_time=start_time,
+            promotion_id=promotion_id,
+            visitor_messages=visitor_messages,
+            tags=tags,
+            sources=allowed[candidate.rec_id],
+            keyword=candidate.keyword,
+            bid_word=candidate.bid_word,
+        )
 
     @staticmethod
     def _row(conversation: KstConversation) -> dict[str, Any]:
