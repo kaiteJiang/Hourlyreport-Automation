@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 
 DEFAULT_VERSION = "hermes_20260710"
-EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", ".superpowers", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud", "diagnostics"}
+EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", ".superpowers", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud", "diagnostics", "promo_video", "promo_video_scaffold", "promo_video_shotcraft"}
 DESKTOP_EXE = "hourlyreport_automation.exe"
 DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups", "kst_exports"}
