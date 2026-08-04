@@ -12060,21 +12060,26 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.31.118"
+    assert CURRENT_VERSION.count(".") == 3
+    assert all(part.isdigit() for part in CURRENT_VERSION.split("."))
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
     assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
+    next_version = (
+        f"{CURRENT_VERSION.rsplit('.', 1)[0]}."
+        f"{int(CURRENT_VERSION.rsplit('.', 1)[1]) + 1}"
+    )
     payload = {
-        "tag_name": "v2026.8.1.119",
+        "tag_name": f"v{next_version}",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.8.1.119.zip",
+                "name": f"Hourlyreport_automation_v{next_version}.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -12085,10 +12090,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.8.1.119"
+    assert update.version == next_version
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.8.1.119") is None
+    assert select_release_update(payload, next_version) is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -12179,14 +12184,20 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import json
 
     import gui.update_manager as update_manager
+    from gui.update_manager import CURRENT_VERSION
 
+    # 用当前版本的下一个序号作为"可更新"版本,避免随版本号升级失效
+    next_version = (
+        f"{CURRENT_VERSION.rsplit('.', 1)[0]}."
+        f"{int(CURRENT_VERSION.rsplit('.', 1)[1]) + 1}"
+    )
     payload = {
-        "tag_name": "v2026.8.1.119",
+        "tag_name": f"v{next_version}",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.8.1.119.zip",
+                "name": f"Hourlyreport_automation_v{next_version}.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -12214,7 +12225,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.8.1.119"]
+    assert [item.version for item in available] == [next_version]
     assert ready == []
 
 

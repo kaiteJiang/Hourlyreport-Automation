@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -285,3 +286,273 @@ def test_main_window_imports_build_word_class_command():
     import gui.main_window as main_window
 
     assert main_window.build_word_class_command is not None
+
+
+# ---- 人工导出模式 ----
+
+def test_flatten_daily_export_conversations_maps_search_word_and_tag():
+    from modules.kst_daily_aggregation import flatten_daily_export_conversations
+
+    details = {
+        "银康01": [
+            {
+                "search_word": "银屑病怎么治",
+                "tag": "有效-三句",
+                "visitor_messages": 2,
+                "dialog_time": "2026-08-03 09:00:00",
+            },
+            {
+                "search_word": "痘痘",
+                "tag": None,
+                "visitor_messages": 1,
+                "dialog_time": "2026-08-03 10:00:00",
+            },
+            {
+                "search_word": None,
+                "tag": "",
+                "visitor_messages": 0,
+                "dialog_time": None,
+            },
+        ]
+    }
+    convs = flatten_daily_export_conversations(details)
+    assert len(convs) == 3
+    assert convs[0]["keyword"] == "银屑病怎么治"
+    assert convs[0]["bid_word"] == "银屑病怎么治"
+    assert convs[0]["tags"] == ["有效-三句"]
+    assert convs[0]["visitor_messages"] == 2
+    assert convs[1]["tags"] == []
+    assert convs[2]["keyword"] == ""
+    assert convs[2]["tags"] == []
+
+
+def test_fetch_baidu_search_word_project_single_source(monkeypatch):
+    from modules.baidu_report_api import fetch_baidu_search_word_project
+
+    config = {
+        "project_id": "changsha_niu",
+        "project_name": "长沙牛",
+        "accounts": {"A": {"baidu_names": ["A"], "kst_ids": ["111"]}},
+        "baidu": {"api_profile": "changsha_niu_baidu"},
+    }
+    calls = []
+
+    def fake_fetch(source_config, root, logger, target_date=None, **kw):
+        calls.append(source_config)
+        return {
+            "raw_rows": 2,
+            "matched_rows": 1,
+            "totals": {"click": 2, "cost": 3.5, "impression": 10},
+            "keyword_counts": {"银屑病": 1, "牛皮癣": 0},
+            "errors": [],
+            "diagnostics": {"api_request_count": 1, "self_heal_actions": []},
+        }
+
+    monkeypatch.setattr(
+        "modules.baidu_report_api.fetch_baidu_search_word_report", fake_fetch
+    )
+    root = Path(tempfile.mkdtemp())
+    report = fetch_baidu_search_word_project(config, root, _NullLogger(), target_date="2026-08-03")
+    assert len(calls) == 1
+    assert calls[0]["baidu"]["api_profile"] == "changsha_niu_baidu"
+    assert report["matched_rows"] == 1
+    assert report["totals"]["click"] == 2
+    assert report["totals"]["cost"] == 3.5
+    assert report["errors"] == []
+
+
+def test_fetch_baidu_search_word_project_multi_source(monkeypatch):
+    from modules.baidu_report_api import fetch_baidu_search_word_project
+
+    config = {
+        "project_id": "shenyang_bai",
+        "project_name": "沈阳白",
+        "baidu_sources": [
+            {
+                "source_id": "a",
+                "source_name": "大中亚",
+                "api_profile": "a_baidu",
+                "accounts": [{"standard_name": "A1", "kst_ids": ["1"]}],
+            },
+            {
+                "source_id": "b",
+                "source_name": "大银康",
+                "api_profile": "b_baidu",
+                "accounts": [{"standard_name": "B1", "kst_ids": ["2"]}],
+            },
+        ],
+    }
+
+    def fake_fetch(source_config, root, logger, target_date=None, **kw):
+        profile = source_config["baidu"]["api_profile"]
+        if profile == "a_baidu":
+            return {"search_word_rows": [
+                {"queryWord": "牛皮癣", "click": 3, "cost": 1.0, "impression": 5}
+            ], "diagnostics": {"api_request_count": 1, "self_heal_actions": []}}
+        return {"search_word_rows": [
+            {"queryWord": "银屑病", "click": 4, "cost": 2.0, "impression": 6}
+        ], "diagnostics": {"api_request_count": 1, "self_heal_actions": []}}
+
+    monkeypatch.setattr(
+        "modules.baidu_report_api.fetch_baidu_search_word_report", fake_fetch
+    )
+    root = Path(tempfile.mkdtemp())
+    report = fetch_baidu_search_word_project(config, root, _NullLogger(), target_date="2026-08-03")
+    assert report["matched_rows"] == 2
+    assert report["totals"]["click"] == 7
+    assert report["totals"]["cost"] == 3.0
+    assert report["errors"] == []
+
+
+def test_fetch_baidu_search_word_project_missing_api_profile(monkeypatch):
+    from modules.baidu_report_api import fetch_baidu_search_word_project
+
+    config = {
+        "project_id": "shenyang_bai",
+        "project_name": "沈阳白",
+        "baidu_sources": [
+            {
+                "source_id": "a",
+                "source_name": "大中亚",
+                "accounts": [{"standard_name": "A1", "kst_ids": ["1"]}],
+            },
+        ],
+    }
+
+    def fake_fetch(source_config, root, logger, target_date=None, **kw):
+        raise AssertionError("未配置 api_profile 时不应调用搜索词接口")
+
+    monkeypatch.setattr(
+        "modules.baidu_report_api.fetch_baidu_search_word_report", fake_fetch
+    )
+    root = Path(tempfile.mkdtemp())
+    report = fetch_baidu_search_word_project(config, root, _NullLogger(), target_date="2026-08-03")
+    assert report["matched_rows"] == 0
+    assert report["errors"]
+    assert any("未配置百度 API 授权" in error for error in report["errors"])
+
+
+def test_run_word_class_pipeline_export_branch(monkeypatch, tmp_path):
+    from modules.run_pipeline import run_word_class_pipeline
+
+    config = {
+        "project_id": "kunming_niu",
+        "project_name": "昆明牛",
+        "excel_path": str(tmp_path / "竞价.xlsx"),
+        "kst": {"data_source": "export"},
+    }
+    details = {
+        "银康01": [
+            {
+                "search_word": "银屑病怎么治",
+                "tag": "有效-三句",
+                "visitor_messages": 2,
+                "dialog_time": "2026-08-03 09:00:00",
+            },
+            {
+                "search_word": "牛皮癣",
+                "tag": "无效",
+                "visitor_messages": 1,
+                "dialog_time": "2026-08-03 10:00:00",
+            },
+        ]
+    }
+
+    def fake_find_export(root, config):
+        return tmp_path / "商务通日报.xlsx"
+
+    def fake_parse(file_path, config, root, target_date):
+        return {
+            "parse_report": {"passed": True, "errors": []},
+            "account_dialog_details": details,
+            "outputs": {},
+        }
+
+    def fake_write(config, root, logger, target_date=None):
+        return {
+            "errors": [],
+            "self_check": {"verification_passed": True},
+            "writes": [],
+            "overwrite_summary": {"overwrite_count": 0},
+            "excel_path": "",
+            "backup_path": "",
+        }
+
+    def fake_search_word(config, root, logger, target_date=None, **kw):
+        return {
+            "raw_rows": 0,
+            "matched_rows": 0,
+            "totals": {"click": 0, "cost": 0.0},
+            "keyword_counts": {},
+            "errors": [],
+        }
+
+    monkeypatch.setattr("modules.run_pipeline.find_latest_kst_export", fake_find_export)
+    monkeypatch.setattr("modules.run_pipeline.parse_kst_daily_file", fake_parse)
+    monkeypatch.setattr("modules.run_pipeline.write_word_share_data", fake_write)
+    monkeypatch.setattr(
+        "modules.run_pipeline.fetch_baidu_search_word_project", fake_search_word
+    )
+
+    report = run_word_class_pipeline(
+        config,
+        tmp_path,
+        _NullLogger(),
+        target_date="2026-08-03",
+        fetch_search_word_func=fake_search_word,
+        write_func=fake_write,
+    )
+    assert report["passed"]
+    assert report["metrics"]["有效对话"] == 1  # 仅"有效-三句"含"有效"
+    assert report["metrics"]["有效转潜"] == 0
+
+
+def test_run_word_class_pipeline_export_no_file(monkeypatch, tmp_path):
+    from modules.run_pipeline import run_word_class_pipeline
+
+    config = {
+        "project_id": "kunming_niu",
+        "project_name": "昆明牛",
+        "excel_path": str(tmp_path / "竞价.xlsx"),
+        "kst": {"data_source": "export"},
+    }
+
+    def fake_find_export(root, config):
+        return None
+
+    def fake_write(config, root, logger, target_date=None):
+        return {
+            "errors": [],
+            "self_check": {"verification_passed": True},
+            "writes": [],
+            "overwrite_summary": {"overwrite_count": 0},
+            "excel_path": "",
+            "backup_path": "",
+        }
+
+    def fake_search_word(config, root, logger, target_date=None, **kw):
+        return {
+            "raw_rows": 0,
+            "matched_rows": 0,
+            "totals": {"click": 0, "cost": 0.0},
+            "keyword_counts": {},
+            "errors": [],
+        }
+
+    monkeypatch.setattr("modules.run_pipeline.find_latest_kst_export", fake_find_export)
+    monkeypatch.setattr("modules.run_pipeline.write_word_share_data", fake_write)
+    monkeypatch.setattr(
+        "modules.run_pipeline.fetch_baidu_search_word_project", fake_search_word
+    )
+
+    report = run_word_class_pipeline(
+        config,
+        tmp_path,
+        _NullLogger(),
+        target_date="2026-08-03",
+        fetch_search_word_func=fake_search_word,
+        write_func=fake_write,
+    )
+    assert report["passed"]
+    assert report["metrics"]["有效对话"] == 0
+    assert report["kst"].get("no_export_file") is True

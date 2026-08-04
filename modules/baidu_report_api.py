@@ -924,6 +924,7 @@ def _fetch_baidu_search_word_production(
             "columns": SEARCH_WORD_COLUMNS,
             "raw_rows": len(all_rows),
             "matched_rows": aggregate["matched_rows"],
+            "search_word_rows": all_rows,
             "totals": {
                 "click": aggregate["click"],
                 "cost": aggregate["cost"],
@@ -1017,3 +1018,146 @@ def fetch_baidu_search_word_report(
         deadline=deadline,
         clock=clock,
     )
+
+
+def fetch_baidu_search_word_project(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token_cloud_first,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
+    task_context: dict[str, Any] | None = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """按项目(含多来源)拉取搜索词报告并聚合。
+
+    单来源项目用顶层 baidu.api_profile;多来源项目逐 source 用各自的
+    api_profile+账户拉取后合并原始行一次聚合。任一 source 缺授权即报错。
+    """
+    from modules.baidu_multi_source import (
+        build_source_runtime_config,
+        resolve_baidu_sources,
+    )
+
+    resolved_date = target_date or (
+        date.today().fromordinal(date.today().toordinal() - 1).isoformat()
+    )
+    date.fromisoformat(resolved_date)
+    raw_sources = config.get("baidu_sources")
+    is_multi = bool(
+        isinstance(raw_sources, list) and raw_sources
+    )
+    if not is_multi:
+        # 单来源项目:顶层 baidu.api_profile + accounts(dict),直接复用单配置抓取
+        return fetch_baidu_search_word_report(
+            config,
+            root,
+            logger,
+            target_date=resolved_date,
+            token_provider=token_provider,
+            commit_standard_report=True,
+            transport=transport,
+            task_context=task_context,
+            deadline=deadline,
+            clock=clock,
+        )
+
+    from modules.baidu_multi_source import (
+        build_source_runtime_config,
+        resolve_baidu_sources,
+    )
+
+    sources = resolve_baidu_sources(config)
+    all_rows: list[dict[str, Any]] = []
+    source_errors: list[str] = []
+    api_request_count = 0
+    actions: list[str] = []
+    top_level_api_profile = str((config.get("baidu") or {}).get("api_profile") or "")
+
+    for source in sources:
+        source_id = str(source.get("source_id") or "default")
+        source_name = str(source.get("source_name") or source_id)
+        source_config = build_source_runtime_config(config, source, task="daily")
+        baidu = dict(source_config.get("baidu") or {})
+        api_profile = str(
+            source.get("api_profile") or top_level_api_profile or ""
+        ).strip()
+        baidu["api_profile"] = api_profile
+        source_config["baidu"] = baidu
+        if not api_profile:
+            source_errors.append(
+                f"{source_name} 未配置百度 API 授权，词类占比百度侧不可用"
+            )
+            continue
+        try:
+            report = fetch_baidu_search_word_report(
+                source_config,
+                root,
+                logger,
+                target_date=resolved_date,
+                token_provider=token_provider,
+                commit_standard_report=False,
+                transport=transport,
+                task_context=task_context,
+                deadline=deadline,
+                clock=clock,
+            )
+        except BaiduReportApiError as exc:
+            source_errors.append(f"{source_name}：{exc}")
+            continue
+        all_rows.extend(report.get("search_word_rows") or [])
+        diagnostics = report.get("diagnostics") or {}
+        api_request_count += int(diagnostics.get("api_request_count") or 0)
+        for action in diagnostics.get("self_heal_actions") or []:
+            if action not in actions:
+                actions.append(action)
+
+    aggregate = aggregate_search_word_rows(all_rows)
+    report: dict[str, Any] = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": resolved_date,
+        "source": "baidu_open_api_search_word",
+        "report_type": SEARCH_WORD_REPORT_TYPE,
+        "columns": SEARCH_WORD_COLUMNS,
+        "raw_rows": len(all_rows),
+        "matched_rows": aggregate["matched_rows"],
+        "totals": {
+            "click": aggregate["click"],
+            "cost": aggregate["cost"],
+            "impression": aggregate["impression"],
+        },
+        "keyword_counts": aggregate["keyword_counts"],
+        "source_errors": source_errors,
+        "errors": list(aggregate["errors"]) + source_errors,
+        "diagnostics": {
+            "api_request_count": api_request_count,
+            "self_heal_actions": list(actions),
+        },
+        "self_check": {
+            "passed": not (aggregate["errors"] or source_errors),
+            "wrote_excel": False,
+            "production_output_replaced": False,
+        },
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _write_json_atomic(
+        _resolve_path(
+            root,
+            config.get("baidu", {}).get(
+                "search_word_output_path",
+                "reports/baidu_search_word_data.json",
+            ),
+        ),
+        report,
+    )
+    logger.info(
+        "百度搜索词数据读取完成：%s；原始行 %s，命中 %s",
+        resolved_date,
+        len(all_rows),
+        aggregate["matched_rows"],
+    )
+    return report

@@ -172,7 +172,8 @@ def test_desktop_spec_packages_kst_database_bridge():
     assert "read_promotion_ids.js" in spec_source
     assert "modules/kst_local" in spec_source.replace("\\", "/")
     assert "modules/kst_local/resources" in spec_source.replace("\\", "/")
-    assert CURRENT_VERSION == "2026.7.31.118"
+    assert CURRENT_VERSION.count(".") == 3
+    assert all(part.isdigit() for part in CURRENT_VERSION.split("."))
 
 
 def test_desktop_fingerprint_changes_when_kst_bridge_changes(tmp_path):

@@ -24,7 +24,7 @@ from modules.kst_local.source import (
     fetch_kst_local_report,
 )
 from modules.task_stop_gate import claim_excel_write, task_stop_requested
-from modules.baidu_report_api import fetch_baidu_search_word_report
+from modules.baidu_report_api import fetch_baidu_search_word_project
 
 
 StepFunc = Callable[..., dict[str, Any]]
@@ -824,12 +824,22 @@ def run_word_class_pipeline(
     logger,
     target_date: str | None = None,
     today: date | None = None,
-    fetch_search_word_func: StepFunc = fetch_baidu_search_word_report,
+    fetch_search_word_func: StepFunc = fetch_baidu_search_word_project,
     fetch_kst_func: Callable[..., dict[str, Any]] = fetch_kst_conversations,
     write_func: StepFunc = write_word_share_data,
 ) -> dict[str, Any]:
     word_date = target_date or _default_yesterday(today)
     excel_path = _resolve_path(root, config.get("excel_path"))
+    kst_data_source = str(
+        config.get("kst", {}).get("data_source") or "export"
+    ).strip().lower()
+    if kst_data_source not in {"export", "local_api"}:
+        raise ValueError(f"不支持的商务通数据源：{kst_data_source}")
+    export_file = (
+        find_latest_kst_export(root, config)
+        if kst_data_source == "export"
+        else None
+    )
 
     report: dict[str, Any] = {
         "mode": "run-word-class",
@@ -938,35 +948,104 @@ def run_word_class_pipeline(
     if stopped:
         return stopped
 
-    print_step(2, 4, "读取商务通访客对话")
-    try:
-        kst_result = fetch_kst_func(config, root, target_date=word_date)
-    except Exception as exc:
-        errors = [str(exc)]
-        report["steps"].append(
-            _step_result("fetch-kst-conversations", False, errors=errors)
-        )
-        print_step_failure(
-            "商务通对话读取异常",
-            suggestion=str(exc),
-            log_path=str(root / "logs" / "run.log"),
-        )
-        return fail("fetch-kst-conversations", errors)
-    conversations = kst_result.get("conversations") or []
-    report["kst"] = {"conversation_count": len(conversations)}
-    report["outputs"].update(kst_result.get("outputs", {}))
-    report["steps"].append(
-        _step_result(
-            "fetch-kst-conversations",
-            True,
-            outputs=kst_result.get("outputs", {}),
-        )
+    kst_step_name = (
+        "fetch-kst-conversations"
+        if kst_data_source == "local_api"
+        else "parse-kst-export"
     )
-    if kst_result.get("summary", {}).get("unavailable"):
-        print_step_success("商务通 API 不可用，对话已按 0 继续")
+    print_step(
+        2,
+        4,
+        "读取商务通访客对话" if kst_data_source == "local_api" else "解析商务通导出文件",
+    )
+    if kst_data_source == "local_api":
+        try:
+            kst_result = fetch_kst_func(config, root, target_date=word_date)
+        except Exception as exc:
+            errors = [str(exc)]
+            report["steps"].append(
+                _step_result(kst_step_name, False, errors=errors)
+            )
+            print_step_failure(
+                "商务通对话读取异常",
+                suggestion=str(exc),
+                log_path=str(root / "logs" / "run.log"),
+            )
+            return fail(kst_step_name, errors)
+        conversations = kst_result.get("conversations") or []
+        report["kst"] = {"conversation_count": len(conversations)}
+        report["outputs"].update(kst_result.get("outputs", {}))
+        report["steps"].append(
+            _step_result(
+                kst_step_name,
+                True,
+                outputs=kst_result.get("outputs", {}),
+            )
+        )
+        if kst_result.get("summary", {}).get("unavailable"):
+            print_step_success("商务通 API 不可用，对话已按 0 继续")
+        else:
+            print_step_success(f"商务通对话已读取（{len(conversations)} 条）")
+        logger.info("词类占比步骤完成：%s", kst_step_name)
     else:
-        print_step_success(f"商务通对话已读取（{len(conversations)} 条）")
-    logger.info("词类占比步骤完成：fetch-kst-conversations")
+        from modules.kst_daily_aggregation import flatten_daily_export_conversations
+
+        if export_file is None:
+            conversations = []
+            report["kst"] = {"conversation_count": 0, "no_export_file": True}
+            report["steps"].append(
+                _step_result(kst_step_name, True, outputs={})
+            )
+            print_step_success("未找到 30 分钟内的商务通导出文件，已按 0 对话处理")
+            logger.info("词类占比步骤完成：%s；未找到导出文件", kst_step_name)
+        else:
+            try:
+                kst_result = parse_kst_daily_file(
+                    export_file,
+                    config,
+                    root,
+                    word_date,
+                )
+            except Exception as exc:
+                errors = [str(exc)]
+                report["steps"].append(
+                    _step_result(kst_step_name, False, errors=errors)
+                )
+                print_step_failure(
+                    "商务通导出文件解析异常",
+                    suggestion=str(exc),
+                    log_path=str(root / "logs" / "run.log"),
+                )
+                return fail(kst_step_name, errors)
+            parse_errors = _errors_from_report(
+                kst_result.get("parse_report", {})
+            )
+            if parse_errors:
+                report["steps"].append(
+                    _step_result(kst_step_name, False, errors=parse_errors)
+                )
+                print_step_failure(
+                    "商务通导出文件解析未通过",
+                    suggestion="；".join(parse_errors),
+                    log_path=str(root / "logs" / "run.log"),
+                )
+                return fail(kst_step_name, parse_errors)
+            conversations = flatten_daily_export_conversations(
+                kst_result.get("account_dialog_details") or {}
+            )
+            report["kst"] = {"conversation_count": len(conversations)}
+            report["outputs"].update(kst_result.get("outputs", {}))
+            report["steps"].append(
+                _step_result(
+                    kst_step_name,
+                    True,
+                    outputs=kst_result.get("outputs", {}),
+                )
+            )
+            print_step_success(
+                f"商务通导出文件已解析（{len(conversations)} 条匹配对话）"
+            )
+            logger.info("词类占比步骤完成：%s", kst_step_name)
 
     stopped = stop_if_requested("after-kst")
     if stopped:
@@ -993,6 +1072,8 @@ def run_word_class_pipeline(
         return fail("merge-word-class", [str(exc)])
     report["metrics"] = merged["metrics"]
     report["kst"] = merged["kst"]
+    if kst_data_source == "export" and export_file is None:
+        report["kst"]["no_export_file"] = True
     report["steps"].append(
         _step_result(
             "merge-word-class",

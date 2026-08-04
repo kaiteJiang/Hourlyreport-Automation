@@ -40,7 +40,7 @@ from modules.project_config import build_runtime_config_from_project, get_curren
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline, run_word_class_pipeline
-from modules.baidu_report_api import fetch_baidu_search_word_report
+from modules.baidu_report_api import fetch_baidu_search_word_project
 from modules.multi_project_runner import run_multi_project_pipeline
 from modules.multi_project_stop import resolve_multi_queue_stop_gate
 from modules.task_stop_gate import pipeline_exit_code
@@ -615,7 +615,7 @@ def main() -> int | None:
             print_final_failure(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/daily_final_run_report.json")
         return pipeline_exit_code(report)
     if args.mode == "fetch-baidu-search-word":
-        report = fetch_baidu_search_word_report(
+        report = fetch_baidu_search_word_project(
             config=config,
             root=ROOT,
             logger=logger,

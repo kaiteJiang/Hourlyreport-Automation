@@ -209,3 +209,28 @@ def aggregate_word_class_conversations(
         "matched_conversations": matched_conversations,
         "keyword_counts": keyword_counts,
     }
+
+
+def flatten_daily_export_conversations(
+    details: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """把日报导出解析的 account_dialog_details 扁平化为词类占比聚合所需结构。
+
+    与日报共用同一份导出的商务通对话表:每条对话的 search_word 即搜索关键词,
+    tag 即名片标签。
+    """
+    conversations: list[dict[str, Any]] = []
+    for items in details.values():
+        for item in items:
+            search_word = str(item.get("search_word") or "").strip()
+            tag = item.get("tag")
+            conversations.append(
+                {
+                    "keyword": search_word,
+                    "bid_word": search_word,
+                    "tags": [str(tag)] if tag not in (None, "") else [],
+                    "visitor_messages": item.get("visitor_messages"),
+                    "start_time": item.get("dialog_time"),
+                }
+            )
+    return conversations
