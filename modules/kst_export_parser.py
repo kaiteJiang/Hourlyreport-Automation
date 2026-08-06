@@ -63,7 +63,14 @@ def find_latest_kst_export(root: Path, config: dict[str, Any]) -> Path | None:
         return None
     if export_dir.is_file():
         return export_dir if export_dir.suffix.lower() in SUPPORTED_SUFFIXES and _is_recent_export(export_dir, max_age_seconds) else None
-    files = [path for path in export_dir.iterdir() if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES]
+    files = [
+        path
+        for path in export_dir.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_SUFFIXES
+        and not path.name.startswith("~$")
+        and not path.name.startswith(".")
+    ]
     files = [path for path in files if _is_recent_export(path, max_age_seconds)]
     if not files:
         return None

@@ -401,6 +401,24 @@ def test_export_rows_to_word_class_conversations_maps_dialog_keyword():
     assert all(conv["keyword"] != "皮肤科" for conv in convs)
 
 
+def test_export_rows_to_word_class_conversations_accepts_unit_suffixed_messages():
+    """'访客历史对话报表'的访客发送消息数带'条'单位时也能解析(宁波等)。"""
+    from modules.kst_daily_aggregation import export_rows_to_word_class_conversations
+
+    rows = [
+        {"对话关键词": "牛皮癣有什么药可以吃", "名片标签": "转潜-有效-已确诊", "访客发送消息数": "1 条"},
+        {"对话关键词": "银屑病怎么治", "名片标签": "智能体", "访客发送消息数": "5 条"},
+        {"对话关键词": "银屑病", "名片标签": "", "访客发送消息数": "0 条"},
+    ]
+    convs = export_rows_to_word_class_conversations(rows)
+    assert len(convs) == 2
+    assert convs[0]["keyword"] == "牛皮癣有什么药可以吃"
+    assert convs[0]["tags"] == ["转潜-有效-已确诊"]
+    assert convs[1]["keyword"] == "银屑病怎么治"
+    # '0 条' 访客消息被排除
+    assert all(conv["keyword"] != "银屑病" for conv in convs)
+
+
 def test_fetch_baidu_search_word_project_single_source(monkeypatch):
     from modules.baidu_report_api import fetch_baidu_search_word_project
 

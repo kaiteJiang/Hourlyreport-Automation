@@ -1580,6 +1580,18 @@ def test_find_latest_kst_export_ignores_files_older_than_30_minutes(tmp_path):
     assert find_latest_kst_export(tmp_path, {"kst": {"export_dir": "kst_exports"}}) == fresh_file
 
 
+def test_find_latest_kst_export_ignores_excel_lock_temp_files(tmp_path):
+    """find_latest_kst_export 应忽略 Excel 打开时的 ~$ 临时锁定文件。"""
+    export_dir = tmp_path / "kst_exports"
+    export_dir.mkdir()
+    real_file = export_dir / "访客历史对话报表 2026年08月05日.xls"
+    real_file.write_text("real", encoding="utf-8")
+    lock_file = export_dir / "~$访客历史对话报表 2026年08月05日.xls"
+    lock_file.write_text("lock", encoding="utf-8")
+
+    assert find_latest_kst_export(tmp_path, {"kst": {"export_dir": "kst_exports"}}) == real_file
+
+
 def test_empty_kst_export_result_writes_zero_dialog_report(tmp_path):
     config = _kunming_niu_runtime_config()
 

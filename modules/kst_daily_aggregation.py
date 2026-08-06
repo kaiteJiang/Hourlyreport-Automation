@@ -9,6 +9,7 @@ from modules.kst_parser import (
     TIME_KEYS,
     VISITOR_MESSAGE_KEYS,
     _effective_config,
+    _parse_non_negative_int,
     has_visitor_dialog,
     map_account_from_row,
     pick_value,
@@ -229,10 +230,8 @@ def export_rows_to_word_class_conversations(
         if not search_word:
             continue
         visitor_messages = pick_value(row, VISITOR_MESSAGE_KEYS)
-        try:
-            if int(visitor_messages or 0) < 1:
-                continue
-        except (TypeError, ValueError):
+        visitor_count = _parse_non_negative_int(visitor_messages)
+        if visitor_count is None or visitor_count < 1:
             continue
         tag = pick_value(row, TAG_KEYS)
         conversations.append(
