@@ -3,7 +3,7 @@
   "projects_dir": "configs/projects",
   "secrets_file": "secrets/secrets.json",
   "baidu_data_source_preference": "api",
-  "kst_data_source": "local_api",
+  "kst_data_source": "export",
   "desktop_pet": "hidden",
   "desktop_pet_scale": 0.9,
   "desktop_pet_position": {

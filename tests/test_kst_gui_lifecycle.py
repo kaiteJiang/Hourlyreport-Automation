@@ -47,14 +47,11 @@ def _set_kst_data_source(root: Path, mode: str) -> None:
     )
 
 
-def _root():
-    return Path(__file__).resolve().parents[1]
-
-
-def test_window_starts_manager_and_updates_status(qapp):
+def test_window_starts_manager_and_updates_status(qapp, tmp_path):
+    _set_kst_data_source(tmp_path, "local_api")
     fake = FakeKstApiManager()
     window = MainWindow(
-        _root(),
+        tmp_path,
         kst_api_manager_factory=lambda *_: fake,
     )
 
@@ -69,10 +66,11 @@ def test_window_starts_manager_and_updates_status(qapp):
     window.close()
 
 
-def test_window_stop_is_idempotent(qapp):
+def test_window_stop_is_idempotent(qapp, tmp_path):
+    _set_kst_data_source(tmp_path, "local_api")
     fake = FakeKstApiManager()
     window = MainWindow(
-        _root(),
+        tmp_path,
         kst_api_manager_factory=lambda *_: fake,
     )
 
