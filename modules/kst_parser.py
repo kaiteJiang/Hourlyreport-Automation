@@ -13,7 +13,7 @@ ACCOUNT_KEYS = ["账户", "推广账户", "来源账户", "项目", "来源", "�
 REMARK_KEYS = ["备注说明", "备注", "说明"]
 TAG_KEYS = ["名片标签", "标签", "客户标签", "访客标签"]
 TIME_KEYS = ["对话时间"]
-SEARCH_WORD_KEYS = ["搜索词", "搜索关键词"]
+SEARCH_WORD_KEYS = ["搜索词", "搜索关键词", "对话关键词"]
 VISITOR_MESSAGE_KEYS = ["访客消息数", "访客发送消息数", "访客发送数", "访客消息", "访客消息量", "客户消息数", "访客发言数"]
 PROMOTION_ID_MAP: dict[str, str] = {}
 

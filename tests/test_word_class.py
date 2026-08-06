@@ -382,6 +382,25 @@ def test_export_rows_to_word_class_conversations_maps_search_word_and_tag():
     assert all(conv["keyword"] != "银屑病" for conv in convs)
 
 
+def test_export_rows_to_word_class_conversations_maps_dialog_keyword():
+    """商务通导出文件使用'对话关键词'列(南京牛等)时,同样识别为搜索关键词。"""
+    from modules.kst_daily_aggregation import export_rows_to_word_class_conversations
+
+    rows = [
+        {"对话关键词": "银屑病传染吗?", "名片标签": "智能体", "访客消息数": 3},
+        {"对话关键词": "治疗牛皮癣用什么药", "名片标签": "转潜-有效", "访客消息数": 2},
+        {"对话关键词": "皮肤科", "名片标签": "", "访客消息数": 0},
+    ]
+    convs = export_rows_to_word_class_conversations(rows)
+    assert len(convs) == 2
+    assert convs[0]["keyword"] == "银屑病传染吗?"
+    assert convs[0]["tags"] == ["智能体"]
+    assert convs[1]["keyword"] == "治疗牛皮癣用什么药"
+    assert convs[1]["tags"] == ["转潜-有效"]
+    # 无访客消息的行被排除
+    assert all(conv["keyword"] != "皮肤科" for conv in convs)
+
+
 def test_fetch_baidu_search_word_project_single_source(monkeypatch):
     from modules.baidu_report_api import fetch_baidu_search_word_project
 
