@@ -3,6 +3,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
 
+from gui.branding import PRODUCT_DISPLAY_NAME
+
 
 class UpdateInstallDialog(QDialog):
     def __init__(self, version: str, parent=None):
@@ -21,7 +23,7 @@ class UpdateInstallDialog(QDialog):
 
         self.title_label = QLabel("正在安装更新")
         self.title_label.setObjectName("updateInstallTitle")
-        self.detail_label = QLabel("安装完成后，蚁之力将重新启动。")
+        self.detail_label = QLabel(f"安装完成后，{PRODUCT_DISPLAY_NAME}将重新启动。")
         self.detail_label.setObjectName("updateInstallDetail")
         layout.addWidget(self.title_label)
         layout.addWidget(self.detail_label)

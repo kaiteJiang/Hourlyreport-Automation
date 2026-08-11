@@ -4891,7 +4891,7 @@ def test_documentation_api_mode_uses_global_preference_and_current_product_name(
     }
 
     for name, content in documents.items():
-        assert "蚁之力 · 竞价数据自动化" in content, f"{name} 缺少当前产品名"
+        assert "竞价数据自动化控制台" in content, f"{name} 缺少当前产品名"
         assert "baidu_data_source_preference" in content, f"{name} 缺少应用级偏好键"
         assert "A" in content and "API 优先" in content, f"{name} 缺少 A 模式说明"
         assert "B" in content and "强制浏览器" in content, f"{name} 缺少 B 模式说明"
@@ -10309,8 +10309,8 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert 40 <= window.spinner.width() <= 52
     assert window.spinner.height() <= 26
     assert window.spinner.objectName() == "clawdAnimator"
-    assert window.windowTitle() == "蚁之力-竞价数据自动化"
-    assert window.title_label.text() == "蚁之力-竞价数据自动化"
+    assert window.windowTitle() == "竞价数据自动化控制台"
+    assert window.title_label.text() == "竞价数据自动化控制台"
     assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text() == "系统"
     assert window.system_config_button.height() == window.title_label.height()
@@ -10783,8 +10783,8 @@ def test_gui_uses_unified_hourlyreport_technical_names(monkeypatch):
     window = MainWindow(root)
     pet = ClawdDesktopPet(root, lambda: None, lambda _x, _y: None)
 
-    assert window.tray_icon.toolTip() == "蚁之力 · 竞价数据自动化"
-    assert "蚁之力 · 竞价数据自动化" in pet.toolTip()
+    assert window.tray_icon.toolTip() == "竞价数据自动化控制台"
+    assert "竞价数据自动化控制台" in pet.toolTip()
     assert APP_EXE_NAME == "hourlyreport_automation.exe"
     assert APP_NAME == "hourlyreport_automation"
     assert DESKTOP_EXE == APP_EXE_NAME

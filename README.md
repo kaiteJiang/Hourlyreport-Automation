@@ -1,12 +1,4 @@
-<p align="center">
-  <img src="docs/images/readme-hero-v118.webp" width="100%" alt="蚁之力竞价数据自动化 v118 产品横幅">
-</p>
-
-<p align="center">
-  <img src="assets/app_icon.png" width="76" alt="蚁之力 Logo">
-</p>
-
-<h1 align="center">蚁之力 · 竞价数据自动化</h1>
+<h1 align="center">竞价数据自动化控制台</h1>
 
 <p align="center">
   <strong>让竞价数据从读取、校验到安全入表，全程自动完成</strong><br>
@@ -14,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.31.118-3B82F6?style=for-the-badge" alt="Version 2026.7.31.118">
+  <img src="https://img.shields.io/badge/version-2026.8.11.123-3B82F6?style=for-the-badge" alt="Version 2026.8.11.123">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Local-First-16A34A?style=for-the-badge" alt="Local First">
   <img src="https://img.shields.io/badge/Excel-Safe-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -33,18 +25,6 @@
 ---
 
 ## 产品一览
-
-<p align="center">
-  <img src="docs/images/desktop-console-v118.png" width="900" alt="蚁之力竞价数据自动化 v118 桌面控制台">
-</p>
-
-<p align="center"><sub>v2026.7.31.118 桌面工作台：项目、数据模式、小时报、日报、当前流程与实时日志集中在一个窗口。</sub></p>
-
-<p align="center">
-  <img src="docs/images/kst-api-diagnostics-v118.png" width="900" alt="v118 快商通本地 API 状态诊断实时日志">
-</p>
-
-<p align="center"><sub>v118 诊断示例：服务已启动不等于当前项目已取数；未完成站点 ID / 推广 ID 映射时，实时日志会给出下一步操作。</sub></p>
 
 <table>
   <tr>
@@ -67,17 +47,18 @@
   </tr>
 </table>
 
-**蚁之力 · 竞价数据自动化**是一套在 Windows 本地运行的百度竞价小时报与日报工作台。同事选择项目、时段或日期后，程序负责读取、校验、合并、备份、写入、复核和结果汇总。
+**竞价数据自动化控制台**是一套在 Windows 本地运行的百度竞价小时报与日报工作台。同事选择项目、时段或日期后，程序负责读取、校验、合并、备份、写入、复核和结果汇总。
 
 > 当前版本不做 QQ/微信自动发送，不操作快商通客户端，不做 OCR，不自动截图发送，也不把业务数据交给外部 AI 分析服务。
 
-### v118 重点
+### v123 重点
 
 - 快商通同时支持 Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe` 与旧 Java/JCEF `OnlineCS.exe` 的本地数据目录探测。
 - 项目身份优先使用唯一站点 ID，再用推广 ID / 账户映射作辅助；身份不唯一时拒绝取数并在实时日志中说明原因。
 - KST 灯表示“当前项目可以安全绑定并取数”，不是单纯表示 `127.0.0.1:18766` 端口正在监听；可在“系统 → 快商通模式 → 重新扫描快商通”重新建立映射。
 - 快商通不可用时不读取旧导出、不拼接部分结果；该项目快商通指标按 0 继续，百度数据仍按既定边界处理。
 - 百度阶段连续 45 秒没有新日志时给出可停止提示，避免任务看起来卡死。
+- 工作台名称统一为“竞价数据自动化控制台”，业务流程和数据安全边界保持不变。
 
 ## 从数据到报表
 
@@ -107,7 +88,7 @@ flowchart LR
 | 小时报 | 处理 11 点、15 点和 18 点报表 | 百度、快商通、合并、Excel 写入阶段可追踪 |
 | 日报 | 默认处理昨天，也可指定日期 | 等待表格快照稳定并做基础完整性校验，不使用超时前的早期残值 |
 | 多项目 | GUI 可选择 1–3 个项目 | 仅百度 API 并行准备；快商通、合并和 Excel 写入按选择顺序串行，不降级浏览器 |
-| 桌面工作台 | GUI、托盘与小螃蟹状态提示 | 区分“服务已启动”和“当前项目可取数”，实时日志给出可执行诊断与重扫入口 |
+| 桌面工作台 | GUI、托盘与状态提示 | 区分“服务已启动”和“当前项目可取数”，实时日志给出可执行诊断与重扫入口 |
 | 在线更新 | 通过 GitHub Release 获取程序更新 | 更新程序文件，不覆盖用户配置、凭据和运行数据 |
 
 ## 快速开始
@@ -118,7 +99,7 @@ flowchart LR
 新电脑只分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.31.118.exe
+Hourlyreport_automation_setup_v2026.8.11.123.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动会检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -172,16 +153,17 @@ Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总�
 
 | 项目 | 内容 |
 |:--|:--|
-| 当前版本 | `2026.7.31.118` |
-| Release Tag | `v2026.7.31.118` |
-| 在线更新 | `Hourlyreport_automation_v2026.7.31.118.zip` |
-| 完整安装 | `Hourlyreport_automation_setup_v2026.7.31.118.exe` |
+| 当前版本 | `2026.8.11.123` |
+| Release Tag | `v2026.8.11.123` |
+| 在线更新 | `Hourlyreport_automation_v2026.8.11.123.zip` |
+| 完整安装 | `Hourlyreport_automation_setup_v2026.8.11.123.exe` |
 | 更新仓库 | [`kaiteJiang/Hourlyreport-Automation`](https://github.com/kaiteJiang/Hourlyreport-Automation) |
 
 版本号遵循 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/`、`browser_profile/` 和 `runtime/`。
 
 | 版本 | 重点 |
 |:--|:--|
+| `v123` | 工作台名称统一为“竞价数据自动化控制台”；保留现有 API、快商通、Excel 与实时日志流程 |
 | `v118` | 加强新旧快商通客户端的路径发现与身份映射；重新扫描入口始终可用；百度 API 长时间无输出时给出可停止提示，并补充脱敏失败诊断 |
 | `v117` | 修复 Electron 客户端持续写库被误判为数据库超时；在快商通设置中直接提供程序目录、数据目录与重新扫描入口 |
 | `v116` | 快商通本地 API 支持 Electron 与旧 Java/JCEF 两类客户端；加强本机路径设置、退避重试与在线更新包数据隔离 |
@@ -214,7 +196,7 @@ GUI、HERMES 和 CLI 共享应用级配置 `baidu_data_source_preference`，缺�
 
 快商通本地 API 会自动识别两类受支持客户端：Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe`（数据目录通常为 `%LOCALAPPDATA%\OnlineWebCSNew`）和旧 Java/JCEF `OnlineCS.exe`（数据目录通常为“文档”下的 `KuaiShangDataNew`）。客户端必须保持运行；程序只读识别到的数据，不会启动、控制或迁移快商通客户端。
 
-如自动发现失败，可在 `系统 > 快商通模式` 中依次选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”；选择的是目录，不是单个数据库文件。v118 先用唯一站点 ID 确认项目，再用推广 ID / 账户映射补充身份；站点 ID 缺失、项目未绑定、映射歧义、数据不完整或旧数据库结构不兼容时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。API 会按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 退避重试；同一原因只在首次、原因变化和每 5 分钟状态提醒时写实时日志。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取，并且不会启动或重试本地 API。
+如自动发现失败，可在 `系统 > 快商通模式` 中依次选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”；选择的是目录，不是单个数据库文件。v123 先用唯一站点 ID 确认项目，再用推广 ID / 账户映射补充身份；站点 ID 缺失、项目未绑定、映射歧义、数据不完整或旧数据库结构不兼容时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。API 会按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 退避重试；同一原因只在首次、原因变化和每 5 分钟状态提醒时写实时日志。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取，并且不会启动或重试本地 API。
 
 | 小时报字段 | 快商通标签来源 | 说明 |
 |:--|:--|:--|
@@ -310,22 +292,14 @@ hourly_report_bot_release_v0.4.4/
 </details>
 
 <details>
-<summary><strong>6. 协作开发与小螃蟹资产</strong></summary>
+<summary><strong>6. 协作与维护</strong></summary>
 
 所有 AI Agent、自动化助手和人工维护者都必须先阅读 [`AGENTS.md`](AGENTS.md)。其中定义了 Excel 安全、凭据保护、Chrome 策略、API 降级、多项目执行、测试和发布规则。
 
-<p align="center">
-  <img src="assets/clawd/spritesheet.webp" width="720" alt="小螃蟹桌面宠物动作帧">
-</p>
-
-<p align="center"><sub>桌面宠物会跟随任务阶段切换动作，并承担轻量状态提示；它不参与业务数据处理。</sub></p>
+本文档只说明业务流程、运行边界和安全约束，不展示第三方角色形象或程序截图。
 </details>
 
 ---
-
-<p align="center">
-  <img src="assets/app_icon.png" width="48" alt="蚁之力">
-</p>
 
 <p align="center">
   <strong>Local-first · API-first · Excel-safe</strong><br>

@@ -3062,7 +3062,7 @@ class MainWindow(QMainWindow):
         name_label.setObjectName("aboutClawdTitle")
         layout.addWidget(name_label)
 
-        product_label = QLabel("蚁之力 · 竞价数据自动化")
+        product_label = QLabel(PRODUCT_DISPLAY_NAME)
         product_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         product_label.setObjectName("aboutClawdText")
         layout.addWidget(product_label)
