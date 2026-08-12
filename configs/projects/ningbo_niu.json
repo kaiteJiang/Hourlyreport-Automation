@@ -75,6 +75,19 @@
       "kst_names": [
         "宁波博润5"
       ]
+    },
+    {
+      "standard_name": "宁波博润13",
+      "baidu_names": [
+        "宁波博润13"
+      ],
+      "excel_name": "宁波博润13",
+      "kst_ids": [
+        "54467458"
+      ],
+      "kst_names": [
+        "宁波博润13"
+      ]
     }
   ],
   "hourly": {
