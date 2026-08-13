@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.8.11.123-3B82F6?style=for-the-badge" alt="Version 2026.8.11.123">
+  <img src="https://img.shields.io/badge/version-2026.8.12.124-3B82F6?style=for-the-badge" alt="Version 2026.8.12.124">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Local-First-16A34A?style=for-the-badge" alt="Local First">
   <img src="https://img.shields.io/badge/Excel-Safe-1D6F42?style=for-the-badge" alt="Excel Safe">
@@ -19,6 +19,7 @@
   <a href="#快速开始">快速开始</a> ·
   <a href="#可靠性与安全">可靠性与安全</a> ·
   <a href="#发布与更新">发布更新</a> ·
+  <a href="#开源声明">开源声明</a> ·
   <a href="#深入了解">深入了解</a>
 </p>
 
@@ -51,9 +52,10 @@
 
 > 当前版本不做 QQ/微信自动发送，不操作快商通客户端，不做 OCR，不自动截图发送，也不把业务数据交给外部 AI 分析服务。
 
-### v123 重点
+### v124 重点
 
-- 快商通同时支持 Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe` 与旧 Java/JCEF `OnlineCS.exe` 的本地数据目录探测。
+- 宁波牛项目新增统计账户“宁波博润13”，商务通推广 ID 为 `54467458`，日报与小时报均沿用现有表头识别和安全写入流程。
+- 快商通继续支持 Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe` 与旧 Java/JCEF `OnlineCS.exe` 的本地数据目录探测。
 - 项目身份优先使用唯一站点 ID，再用推广 ID / 账户映射作辅助；身份不唯一时拒绝取数并在实时日志中说明原因。
 - KST 灯表示“当前项目可以安全绑定并取数”，不是单纯表示 `127.0.0.1:18766` 端口正在监听；可在“系统 → 快商通模式 → 重新扫描快商通”重新建立映射。
 - 快商通不可用时不读取旧导出、不拼接部分结果；该项目快商通指标按 0 继续，百度数据仍按既定边界处理。
@@ -99,7 +101,7 @@ flowchart LR
 新电脑只分发完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.8.11.123.exe
+Hourlyreport_automation_setup_v2026.8.12.124.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动会检查运行环境；缺少环境时安装隔离的项目专用 Python 3.14.5，不修改系统 Python，也不要求卸载电脑已有版本。
@@ -153,16 +155,17 @@ Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总�
 
 | 项目 | 内容 |
 |:--|:--|
-| 当前版本 | `2026.8.11.123` |
-| Release Tag | `v2026.8.11.123` |
-| 在线更新 | `Hourlyreport_automation_v2026.8.11.123.zip` |
-| 完整安装 | `Hourlyreport_automation_setup_v2026.8.11.123.exe` |
+| 当前版本 | `2026.8.12.124` |
+| Release Tag | [`v2026.8.12.124`](https://github.com/kaiteJiang/Hourlyreport-Automation/releases/tag/v2026.8.12.124) |
+| 在线更新 | `Hourlyreport_automation_v2026.8.12.124.zip` |
+| 完整安装 | `Hourlyreport_automation_setup_v2026.8.12.124.exe` |
 | 更新仓库 | [`kaiteJiang/Hourlyreport-Automation`](https://github.com/kaiteJiang/Hourlyreport-Automation) |
 
 版本号遵循 `发布年.月.日.永久累计序号`，累计序号跨日期永久递增。在线更新包只更新程序文件，不覆盖 `configs/`、`secrets/`、`logs/`、`reports/`、`backups/`、`diagnostics/`、`kst_exports/`、`browser_profile/` 和 `runtime/`。
 
 | 版本 | 重点 |
 |:--|:--|
+| `v124` | 宁波牛新增统计账户“宁波博润13”（商务通推广 ID：`54467458`） |
 | `v123` | 工作台名称统一为“竞价数据自动化控制台”；保留现有 API、快商通、Excel 与实时日志流程 |
 | `v118` | 加强新旧快商通客户端的路径发现与身份映射；重新扫描入口始终可用；百度 API 长时间无输出时给出可停止提示，并补充脱敏失败诊断 |
 | `v117` | 修复 Electron 客户端持续写库被误判为数据库超时；在快商通设置中直接提供程序目录、数据目录与重新扫描入口 |
@@ -175,6 +178,12 @@ Excel 写入不会重建工作簿，不修改无关 sheet、公式区、汇总�
 | `v110` | 修复云端 Token 时区解析与多授权并发覆盖；更新 GitHub 用户名 |
 
 更早版本与完整中文更新说明见 [`docs/releases/`](docs/releases/)。
+
+## 开源声明
+
+本项目以 MIT License 开源，允许在遵守许可证条件的前提下使用、复制、修改和再分发。完整许可条款见 [`LICENSE`](LICENSE)。
+
+仓库不包含真实账号密码、OAuth Token、业务报表、运行日志或个人配置；部署和使用时仍须遵守适用的法律法规、第三方平台规则及数据保密义务。第三方依赖和素材的权利与许可证以其各自声明为准，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ## 深入了解
 
@@ -196,7 +205,7 @@ GUI、HERMES 和 CLI 共享应用级配置 `baidu_data_source_preference`，缺�
 
 快商通本地 API 会自动识别两类受支持客户端：Electron `OnlineWebCS.exe` / `OnlineWebCSNew.exe`（数据目录通常为 `%LOCALAPPDATA%\OnlineWebCSNew`）和旧 Java/JCEF `OnlineCS.exe`（数据目录通常为“文档”下的 `KuaiShangDataNew`）。客户端必须保持运行；程序只读识别到的数据，不会启动、控制或迁移快商通客户端。
 
-如自动发现失败，可在 `系统 > 快商通模式` 中依次选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”；选择的是目录，不是单个数据库文件。v123 先用唯一站点 ID 确认项目，再用推广 ID / 账户映射补充身份；站点 ID 缺失、项目未绑定、映射歧义、数据不完整或旧数据库结构不兼容时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。API 会按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 退避重试；同一原因只在首次、原因变化和每 5 分钟状态提醒时写实时日志。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取，并且不会启动或重试本地 API。
+如自动发现失败，可在 `系统 > 快商通模式` 中依次选择“选择快商通程序目录”“选择快商通数据目录”，或点击“重新扫描快商通”；选择的是目录，不是单个数据库文件。当前版本先用唯一站点 ID 确认项目，再用推广 ID / 账户映射补充身份；站点 ID 缺失、项目未绑定、映射歧义、数据不完整或旧数据库结构不兼容时，该项目快商通指标按 0 继续，百度数据照常处理，不会改读旧导出文件。API 会按 `5 秒 → 15 秒 → 30 秒 → 60 秒` 退避重试；同一原因只在首次、原因变化和每 5 分钟状态提醒时写实时日志。人工导出模式读取 Excel/CSV，可从项目配置目录、`kst_exports/` 或 `--file` 指定路径获取，并且不会启动或重试本地 API。
 
 | 小时报字段 | 快商通标签来源 | 说明 |
 |:--|:--|:--|
